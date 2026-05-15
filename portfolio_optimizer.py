@@ -51,8 +51,13 @@ def fetch_prices(tickers):
     """Fetch real-time prices from Yahoo Finance"""
     print("📊 Fetching real-time prices from Yahoo Finance...")
     try:
-        data = yf.download(tickers, period='1y', progress=False)['Adj Close']
-        prices = data.iloc[-1].to_dict()
+        data = yf.download(tickers, period='1d', progress=False)
+        if isinstance(data.columns, pd.MultiIndex):
+            # Multiple tickers - use 'Close' from MultiIndex
+            prices = data['Close'].iloc[-1].to_dict()
+        else:
+            # Single ticker - data is already a Series
+            prices = {tickers[0]: data['Close'].iloc[-1]}
         print("✅ Prices fetched successfully!")
         return prices
     except Exception as e:
@@ -356,12 +361,16 @@ def main():
     # Get historical data for optimization
     print("\n📊 Fetching historical data for optimization...")
     try:
-        hist_data = yf.download(tickers, period='1y', progress=False)['Adj Close']
+        data = yf.download(tickers, period='1y', progress=False)
+        if isinstance(data.columns, pd.MultiIndex):
+            hist_data = data['Close']  # Use 'Close' instead of 'Adj Close'
+        else:
+            hist_data = data['Close'] if 'Close' in data.columns else data
         returns = hist_data.pct_change().dropna()
         mean_returns = returns.mean()
         cov_matrix = returns.cov()
-    except:
-        print("⚠️  Using mock historical data for optimization...")
+    except Exception as e:
+        print(f"⚠️  Using mock historical data for optimization... ({e})")
         mean_returns = pd.Series({t: 0.15 for t in tickers})
         cov_matrix = pd.DataFrame(np.random.rand(len(tickers), len(tickers)),
                                  index=tickers, columns=tickers)
