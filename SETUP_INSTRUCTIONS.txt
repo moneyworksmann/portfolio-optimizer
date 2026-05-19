@@ -1,0 +1,176 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                   📊 PORTFOLIO OPTIMIZER - SETUP GUIDE                      ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+🎯 WHAT YOU HAVE:
+  ✓ Investment_Portfolio_Tracker.xlsx - Your portfolio dashboard
+  ✓ portfolio_optimizer.py - Script to fetch prices & update Excel
+  ✓ README.md - Full documentation
+  ✓ This setup guide
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚡ QUICK START (3 STEPS):
+
+STEP 1: Install Required Libraries
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Open Terminal (Mac/Linux) or Command Prompt (Windows) and paste:
+
+  pip install yfinance pandas numpy scipy matplotlib seaborn openpyxl pillow
+
+Press Enter and wait for "Successfully installed" message.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 2: Navigate to Your Portfolio Folder
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+In the same Terminal/Command Prompt, run:
+
+  cd ~/Library/CloudStorage/OneDrive-RutgersUniversity/'Personal\ Investment\ Tracker'
+
+Or for Windows:
+
+  cd "C:\Users\YourUsername\OneDrive\RutgersUniversity\Personal Investment Tracker"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 3: Run the Optimizer
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+In Terminal/Command Prompt, run:
+
+  python3 portfolio_optimizer.py
+
+✅ Wait 1-2 minutes while it:
+   - Fetches real-time prices from Yahoo Finance
+   - Calculates optimal portfolio allocation
+   - Generates 5 professional charts
+   - Updates Investment_Portfolio_Tracker.xlsx
+
+✅ When done, you'll see:
+   ✓ Confirmation messages in Terminal
+   - PORTFOLIO UPDATE COMPLETE!
+
+✅ Now open Investment_Portfolio_Tracker.xlsx
+   - Go to "Optimization" tab
+   - See all charts and KPI metrics!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 WHAT YOU'LL GET:
+
+Sheet 1: Holdings
+  • All 18 positions with current prices (updated in real-time)
+  • Cost basis, current value, gains/losses
+  • Individual return % for each stock
+
+Sheet 2: Portfolio Summary
+  • Total portfolio value
+  • Total gains/losses
+  • Overall return percentage
+  • Robinhood vs Webull split
+
+Sheet 3: Optimization (MAIN DASHBOARD) ⭐
+  • Real-time price last updated timestamp
+  • Key metrics (portfolio value, gain, return %)
+  • Current portfolio annual return
+  • Optimal portfolio annual return
+  • 5 Embedded Charts:
+    1️⃣  Sector Concentration (Pie Chart)
+    2️⃣  Current vs Optimal Allocation (Bar Charts)
+    3️⃣  Portfolio Growth (1-Year Performance)
+    4️⃣  Sensitivity Analysis (What-If Scenarios)
+    5️⃣  Risk-Return Profile (Risk vs Return)
+
+Sheet 4: Position Allocation
+  • Current value of each position
+  • % of total portfolio
+  • Concentration risk identification
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔄 HOW OFTEN TO RUN:
+
+  Weekly   → Stay on top of price changes
+  Monthly  → Review performance & trends
+  Quarterly→ Rebalance based on recommendations
+  Annually → Full portfolio review
+
+Just repeat Step 3 anytime you want fresh data!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❓ COMMON ISSUES & FIXES:
+
+Issue: "Command not found: python3"
+Fix:   Try "python" instead of "python3"
+       Or install Python from python.org
+
+Issue: "ModuleNotFoundError: yfinance"
+Fix:   Run: pip install yfinance
+       (Sometimes you need: pip3 install yfinance)
+
+Issue: Charts don't show up
+Fix:   Close Excel
+       Re-run: python3 portfolio_optimizer.py
+       Reopen Excel
+
+Issue: "Permission denied"
+Fix:   Mac: chmod +x portfolio_optimizer.py
+       Then: python3 portfolio_optimizer.py
+
+Issue: "No module named matplotlib"
+Fix:   pip install matplotlib
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📈 YOUR CURRENT PORTFOLIO SNAPSHOT:
+
+Total Holdings: 18 positions
+Total Value: ~$2,516
+Current Gain/Loss: +$350 to +$400 (varies with prices)
+
+Top 3 Holdings (CONCENTRATION ALERT ⚠️):
+  1. MU (Micron)     - ~17%
+  2. MSFT (Microsoft)- ~10%
+  3. ORCL (Oracle)   - ~8%
+
+Recommendation: Reduce to <15% each for better diversification
+
+Sectors:
+  Technology  40-45% (MSFT, ORCL, MU, NVDA, etc.)
+  Financials  15-20% (JPM, BAC, C, LYG)
+  Consumer    10-12% (AMZN, WBD, WMT)
+  Other       10-15% (Diversified, Real Estate, Utilities, etc.)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💾 IMPORTANT FILES:
+
+DO NOT DELETE:
+  • Investment_Portfolio_Tracker.xlsx (your data!)
+  • portfolio_optimizer.py (the updater script)
+
+SAFE TO DELETE:
+  • Any .png files created in this folder
+  • They're just temporary chart files
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 YOU'RE ALL SET!
+
+1. Run Step 3 above right now to get started
+2. Check the Optimization tab in Excel
+3. Review the recommendations
+4. Run it weekly/monthly to stay current
+
+Questions? See README.md for detailed documentation.
+
+Happy investing! 📊
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Created: 2026-05-15
+Last Updated: 2026-05-15
+Status: Ready to use ✅
