@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portfolio Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- HEADER -->
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">📈</span>
+        <span class="logo-text">Portfolio Tracker</span>
+      </div>
+      <button id="btn-reset" class="btn-ghost" style="display:none">← Upload New</button>
+    </div>
+  </header>
+
+  <!-- ══════════════════════════════════════════════════════ UPLOAD VIEW -->
+  <section id="view-upload" class="view active">
+    <div class="upload-wrap">
+      <h1>Track Your Portfolio</h1>
+      <p class="lead">Upload your holdings to see live returns, sector allocation, and benchmark performance.</p>
+
+      <div class="tab-bar">
+        <button class="tab active" data-tab="csv">CSV Upload</button>
+        <button class="tab" data-tab="screenshot">Screenshot</button>
+        <button class="tab" data-tab="manual">Manual Entry</button>
+      </div>
+
+      <!-- CSV tab -->
+      <div id="tab-csv" class="tab-pane active">
+        <div id="drop-csv" class="drop-zone">
+          <div class="drop-icon">📄</div>
+          <p class="drop-title">Drag &amp; drop your CSV here</p>
+          <p class="drop-sub">or <label for="file-csv" class="link">browse files</label></p>
+          <input type="file" id="file-csv" accept=".csv,.txt" hidden />
+        </div>
+        <p class="format-hint">
+          Expected columns: <code>ticker, shares, avg_cost</code> &nbsp;·&nbsp;
+          <button class="btn-link" id="btn-template">Download template</button>
+        </p>
+      </div>
+
+      <!-- Screenshot tab -->
+      <div id="tab-screenshot" class="tab-pane">
+        <div id="drop-screenshot" class="drop-zone">
+          <div class="drop-icon">📸</div>
+          <p class="drop-title">Drag &amp; drop a brokerage screenshot</p>
+          <p class="drop-sub">or <label for="file-screenshot" class="link">browse files</label></p>
+          <input type="file" id="file-screenshot" accept="image/*" hidden />
+        </div>
+        <p class="format-hint">Works with Robinhood, Webull, Fidelity, Schwab — review parsed data before analyzing.</p>
+      </div>
+
+      <!-- Manual tab -->
+      <div id="tab-manual" class="tab-pane">
+        <p class="format-hint" style="margin-bottom:12px">Add positions one at a time, then click <strong>Continue to Review</strong>.</p>
+        <div class="manual-row">
+          <input type="text" id="m-ticker" placeholder="Ticker (e.g. AAPL)" maxlength="5" />
+          <input type="number" id="m-shares" placeholder="Shares" step="any" min="0" />
+          <input type="number" id="m-cost" placeholder="Avg cost (optional)" step="any" min="0" />
+          <button id="btn-manual-add" class="btn-secondary">Add</button>
+        </div>
+        <div id="manual-list" class="manual-list"></div>
+        <button id="btn-manual-continue" class="btn-primary" style="margin-top:16px;display:none">Continue to Review →</button>
+      </div>
+
+      <div id="upload-msg" class="msg" style="display:none"></div>
+
+      <div id="upload-loading" class="loading-wrap" style="display:none">
+        <div class="spinner"></div>
+        <p>Parsing your holdings…</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ REVIEW VIEW -->
+  <section id="view-review" class="view">
+    <div class="review-wrap">
+      <div class="review-head">
+        <div>
+          <h2>Review Holdings</h2>
+          <p class="lead">Edit any row, add missing positions, then analyze.</p>
+        </div>
+        <div class="review-actions">
+          <button id="btn-add-row" class="btn-secondary">+ Add Row</button>
+          <button id="btn-analyze" class="btn-primary">Analyze Live →</button>
+        </div>
+      </div>
+
+      <div id="ocr-note" class="msg info" style="display:none"></div>
+
+      <div class="tbl-wrap">
+        <table id="tbl-review">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Shares</th>
+              <th>Avg Cost ($)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tbody-review"></tbody>
+        </table>
+      </div>
+
+      <div id="analyze-msg" class="msg" style="display:none"></div>
+      <div id="analyze-loading" class="loading-wrap" style="display:none">
+        <div class="spinner"></div>
+        <p>Fetching live prices &amp; calculating returns…</p>
+        <p class="sub">This takes 30–60 seconds</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ DASHBOARD VIEW -->
+  <section id="view-dashboard" class="view">
+    <div class="dash-body">
+
+      <!-- Summary cards -->
+      <div class="dash-title-row">
+        <h2>Portfolio Dashboard</h2>
+        <p id="dash-timestamp" class="sub"></p>
+      </div>
+
+      <div class="cards-grid">
+        <div class="card kpi">
+          <div class="kpi-label">Total Value</div>
+          <div class="kpi-val" id="kpi-value">—</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label">Total Cost</div>
+          <div class="kpi-val" id="kpi-cost">—</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label">Total P&amp;L</div>
+          <div class="kpi-val" id="kpi-gain">—</div>
+          <div class="kpi-sub" id="kpi-gain-pct">—</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label">Positions</div>
+          <div class="kpi-val" id="kpi-count">—</div>
+        </div>
+      </div>
+
+      <!-- Charts row 1 -->
+      <div class="charts-row two-col">
+        <div class="card chart-card">
+          <h3>Sector Allocation</h3>
+          <div class="chart-box"><canvas id="chart-sector"></canvas></div>
+        </div>
+        <div class="card chart-card">
+          <h3>Holdings by Weight</h3>
+          <div class="chart-box"><canvas id="chart-weight"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Charts row 2 -->
+      <div class="charts-row two-col">
+        <div class="card chart-card">
+          <h3>Portfolio vs S&amp;P 500 &nbsp;<span class="badge">1 Year (hypothetical)</span></h3>
+          <div class="chart-box"><canvas id="chart-perf"></canvas></div>
+        </div>
+        <div class="card chart-card">
+          <h3>P&amp;L by Position</h3>
+          <div class="chart-box"><canvas id="chart-pnl"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Holdings table -->
+      <div class="card">
+        <div class="tbl-head-row">
+          <h3>All Positions</h3>
+          <div class="sort-row">
+            Sort by
+            <select id="sort-by">
+              <option value="value">Value</option>
+              <option value="gain_pct">Return %</option>
+              <option value="weight">Weight %</option>
+              <option value="gain">P&amp;L $</option>
+              <option value="ticker">Ticker A–Z</option>
+            </select>
+          </div>
+        </div>
+        <div class="tbl-wrap">
+          <table id="tbl-dash">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Sector</th>
+                <th>Shares</th>
+                <th>Avg Cost</th>
+                <th>Price</th>
+                <th>Value</th>
+                <th>P&amp;L ($)</th>
+                <th>P&amp;L (%)</th>
+                <th>Weight</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-dash"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /dash-body -->
+  </section>
+
+</div><!-- /app -->
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
