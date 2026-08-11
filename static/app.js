@@ -336,35 +336,37 @@ function drawWeight(h) {
   });
 }
 
-// ── Chart: Performance line ──────────────────────────────────────
+// ── Chart: Actual Performance vs SPY ─────────────────────────────
 function drawPerf(perf) {
   destroyChart('perf');
+  destroyChart('perfDollar');
   if (!perf?.dates?.length) return;
 
-  // Sample to ~60 points for readability
   const step = Math.max(1, Math.floor(perf.dates.length / 60));
   const sample = arr => arr.filter((_, i) => i % step === 0);
   const dates  = sample(perf.dates);
   const port   = sample(perf.portfolio);
   const spy    = sample(perf.spy);
+  const dateLabels = dates.map(d => {
+    const dt = new Date(d);
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  });
 
+  // P&L percentage chart
   charts.perf = new Chart(ctx('chart-perf'), {
     type: 'line',
     data: {
-      labels: dates.map(d => {
-        const dt = new Date(d);
-        return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      }),
+      labels: dateLabels,
       datasets: [
         {
-          label: 'My Portfolio',
+          label: 'My Portfolio P&L',
           data: port,
           borderColor: '#3b82f6',
           backgroundColor: 'rgba(59,130,246,.08)',
           fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5,
         },
         {
-          label: 'S&P 500',
+          label: 'SPY (Same Investment)',
           data: spy,
           borderColor: '#94a3b8',
           borderDash: [5, 4],
@@ -393,6 +395,63 @@ function drawPerf(perf) {
       },
     },
   });
+
+  // Dollar value chart (if data available)
+  if (perf.portfolio_value?.length) {
+    const portVal = sample(perf.portfolio_value);
+    const spyVal  = sample(perf.spy_value);
+    const costLine = portVal.map(() => perf.total_cost);
+
+    charts.perfDollar = new Chart(ctx('chart-perf-dollar'), {
+      type: 'line',
+      data: {
+        labels: dateLabels,
+        datasets: [
+          {
+            label: 'Portfolio Value',
+            data: portVal,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,.08)',
+            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+          },
+          {
+            label: 'If Invested in SPY',
+            data: spyVal,
+            borderColor: '#f59e0b',
+            borderDash: [5, 4],
+            fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+          },
+          {
+            label: 'Cost Basis',
+            data: costLine,
+            borderColor: '#ef4444',
+            borderDash: [2, 3],
+            fill: false, tension: 0, pointRadius: 0, borderWidth: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 12 }, boxWidth: 16 } },
+          tooltip: {
+            callbacks: {
+              label: c => ` ${c.dataset.label}: ${fmtUSD(c.raw)}`,
+            },
+          },
+        },
+        scales: {
+          x: { grid: { color: '#1c2d45' }, ticks: { color: '#94a3b8', maxTicksLimit: 8 } },
+          y: {
+            grid: { color: '#1c2d45' },
+            ticks: { color: '#94a3b8', callback: v => '$' + v.toLocaleString() },
+          },
+        },
+      },
+    });
+  }
 }
 
 // ── Chart: P&L horizontal bar ────────────────────────────────────

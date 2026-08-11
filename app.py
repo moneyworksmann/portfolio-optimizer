@@ -202,7 +202,7 @@ def analyze():
 
     portfolio = calculate_portfolio(holdings, prices, purchase_prices)
     sectors = get_sectors(tickers)
-    performance = fetch_historical_performance(holdings)
+    performance = fetch_historical_performance(holdings, purchase_prices)
 
     total_value = portfolio['total_value']
     total_cost = portfolio['total_cost']

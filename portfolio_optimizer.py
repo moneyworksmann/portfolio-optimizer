@@ -102,8 +102,14 @@ def calculate_portfolio(holdings, prices, purchase_prices):
     }
 
 
-def fetch_historical_performance(holdings, period='1y'):
-    """Return daily % returns for the portfolio vs SPY over the given period."""
+def fetch_historical_performance(holdings, purchase_prices=None, period='1y'):
+    """Return actual portfolio P&L vs equivalent SPY investment over the period.
+
+    Instead of hypothetical normalized returns, this tracks:
+    - Portfolio: actual dollar value of holdings each day
+    - SPY: what the same total cost basis would be worth if invested in SPY
+    - P&L for both relative to the total cost basis
+    """
     tickers = list(holdings.keys())
     all_tickers = tickers + ['SPY']
     try:
@@ -123,23 +129,41 @@ def fetch_historical_performance(holdings, period='1y'):
 
         portfolio_values = portfolio_values[portfolio_values > 0]
         if portfolio_values.empty or 'SPY' not in data.columns:
-            return {'dates': [], 'portfolio': [], 'spy': []}
+            return {'dates': [], 'portfolio': [], 'spy': [],
+                    'portfolio_value': [], 'spy_value': [], 'total_cost': 0}
 
         common_idx = portfolio_values.index.intersection(data.index)
         pv = portfolio_values.loc[common_idx]
-        spy = data.loc[common_idx, 'SPY'].ffill()
+        spy_prices = data.loc[common_idx, 'SPY'].ffill()
 
-        pv_pct = ((pv / pv.iloc[0]) - 1) * 100
-        spy_pct = ((spy / spy.iloc[0]) - 1) * 100
+        total_cost = 0.0
+        if purchase_prices:
+            for ticker, shares in holdings.items():
+                avg = purchase_prices.get(ticker, 0)
+                total_cost += shares * avg
+
+        if total_cost <= 0:
+            total_cost = float(pv.iloc[0])
+
+        spy_start_price = float(spy_prices.iloc[0])
+        spy_shares = total_cost / spy_start_price
+        spy_values = spy_prices * spy_shares
+
+        portfolio_pnl = ((pv - total_cost) / total_cost) * 100
+        spy_pnl = ((spy_values - total_cost) / total_cost) * 100
 
         return {
-            'dates': pv_pct.index.strftime('%Y-%m-%d').tolist(),
-            'portfolio': [round(float(v), 2) for v in pv_pct],
-            'spy': [round(float(v), 2) for v in spy_pct],
+            'dates': pv.index.strftime('%Y-%m-%d').tolist(),
+            'portfolio': [round(float(v), 2) for v in portfolio_pnl],
+            'spy': [round(float(v), 2) for v in spy_pnl],
+            'portfolio_value': [round(float(v), 2) for v in pv],
+            'spy_value': [round(float(v), 2) for v in spy_values],
+            'total_cost': round(total_cost, 2),
         }
     except Exception as e:
         print(f"fetch_historical_performance error: {e}")
-        return {'dates': [], 'portfolio': [], 'spy': []}
+        return {'dates': [], 'portfolio': [], 'spy': [],
+                'portfolio_value': [], 'spy_value': [], 'total_cost': 0}
 
 
 def optimize_portfolio(tickers, mean_returns, cov_matrix):
@@ -173,7 +197,8 @@ def _portfolio_stats(weights, mean_returns, cov_matrix):
 
 
 def generate_html_report(portfolio_data, prices, current_weights, optimal_weights,
-                         tickers, mean_returns, cov_matrix, hist_data, sectors):
+                         tickers, mean_returns, cov_matrix, hist_data, sectors,
+                         performance=None):
     """Generate a self-contained HTML dashboard with interactive charts."""
 
     # --- Build data payloads for JS ---
@@ -195,6 +220,20 @@ def generate_html_report(portfolio_data, prices, current_weights, optimal_weight
     for ticker in tickers[:8]:
         if ticker in cumulative.columns:
             growth_series[ticker] = [round(float(v), 2) for v in cumulative[ticker].iloc[::step]]
+
+    # Actual portfolio vs SPY performance
+    if performance is None:
+        performance = {'dates': [], 'portfolio': [], 'spy': [],
+                       'portfolio_value': [], 'spy_value': [], 'total_cost': 0}
+    perf_step = max(1, len(performance['dates']) // 80)
+    perf_data = {
+        'dates': performance['dates'][::perf_step],
+        'portfolio': performance['portfolio'][::perf_step],
+        'spy': performance['spy'][::perf_step],
+        'portfolio_value': performance.get('portfolio_value', [])[::perf_step],
+        'spy_value': performance.get('spy_value', [])[::perf_step],
+        'total_cost': performance.get('total_cost', 0),
+    }
 
     # Sensitivity analysis
     scenarios = {
@@ -257,6 +296,7 @@ def generate_html_report(portfolio_data, prices, current_weights, optimal_weight
         'current_alloc': {'labels': [t[0] for t in current_sorted], 'values': [round(t[1] * 100, 2) for t in current_sorted]},
         'optimal_alloc': {'labels': [t[0] for t in optimal_sorted], 'values': [round(t[1] * 100, 2) for t in optimal_sorted]},
         'growth': {'dates': growth_dates, 'series': growth_series},
+        'performance': perf_data,
         'sensitivity': scenario_returns,
         'scatter': scatter_points,
         'holdings': holdings_rows,
@@ -357,13 +397,19 @@ tbody tr:hover td{{background:rgba(255,255,255,.02)}}
 <div class="card chart-card"><h3>Current vs Optimal Allocation (Top 10)</h3><div class="chart-box"><canvas id="chart-alloc"></canvas></div></div>
 </div>
 
-<!-- Row 2: Growth + Sensitivity -->
+<!-- Row 2: Actual Performance vs SPY -->
+<div class="two-col">
+<div class="card chart-card"><h3>Actual Portfolio P&amp;L vs SPY &nbsp;<span class="badge">1 Year</span></h3><div class="chart-box"><canvas id="chart-perf"></canvas></div></div>
+<div class="card chart-card"><h3>Actual Portfolio Value vs SPY &nbsp;<span class="badge">Dollar Value</span></h3><div class="chart-box"><canvas id="chart-perf-dollar"></canvas></div></div>
+</div>
+
+<!-- Row 3: Growth + Sensitivity -->
 <div class="two-col">
 <div class="card chart-card"><h3>Individual Stock Performance (1 Year) &nbsp;<span class="badge">Top 8</span></h3><div class="chart-box"><canvas id="chart-growth"></canvas></div></div>
 <div class="card chart-card"><h3>Sensitivity Analysis: Expected Annual Return</h3><div class="chart-box"><canvas id="chart-sensitivity"></canvas></div></div>
 </div>
 
-<!-- Row 3: Risk-Return Scatter -->
+<!-- Row 4: Risk-Return Scatter -->
 <div class="two-col">
 <div class="card chart-card"><h3>Risk-Return Profile &nbsp;<span class="badge">bubble size = weight</span></h3><div class="chart-box"><canvas id="chart-scatter"></canvas></div></div>
 <div class="card chart-card" style="display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px">
@@ -460,7 +506,95 @@ new Chart(ctx('chart-alloc'), {{
   }}
 }});
 
-// 3. Individual stock growth
+// 3. Actual Portfolio P&L vs SPY (percentage)
+(function() {{
+  if (!D.performance || !D.performance.dates || !D.performance.dates.length) return;
+  var dates = D.performance.dates.map(function(d){{ var dt = new Date(d); return dt.toLocaleDateString('en-US', {{month:'short',day:'numeric'}}); }});
+  new Chart(ctx('chart-perf'), {{
+    type: 'line',
+    data: {{
+      labels: dates,
+      datasets: [
+        {{
+          label: 'My Portfolio P&L',
+          data: D.performance.portfolio,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,.08)',
+          fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+        }},
+        {{
+          label: 'SPY (Same Investment)',
+          data: D.performance.spy,
+          borderColor: '#94a3b8',
+          borderDash: [5, 4],
+          fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+        }},
+      ],
+    }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      interaction: {{ mode: 'index', intersect: false }},
+      plugins: {{
+        legend: {{ labels: {{ color: '#94a3b8', font: {{ size: 12 }}, boxWidth: 16 }} }},
+        tooltip: {{ callbacks: {{ label: function(c) {{ return ' ' + c.dataset.label + ': ' + (c.raw >= 0 ? '+' : '') + c.raw.toFixed(2) + '%'; }} }} }},
+      }},
+      scales: {{
+        x: {{ grid: {{ color: '#1c2d45' }}, ticks: {{ color: '#94a3b8', maxTicksLimit: 8 }} }},
+        y: {{ grid: {{ color: '#1c2d45' }}, ticks: {{ color: '#94a3b8', callback: function(v){{ return (v>=0?'+':'') + v.toFixed(1) + '%'; }} }} }},
+      }},
+    }},
+  }});
+}})();
+
+// 3b. Actual Portfolio Value vs SPY (dollar)
+(function() {{
+  if (!D.performance || !D.performance.dates || !D.performance.dates.length) return;
+  var dates = D.performance.dates.map(function(d){{ var dt = new Date(d); return dt.toLocaleDateString('en-US', {{month:'short',day:'numeric'}}); }});
+  var costLine = D.performance.portfolio_value.map(function(){{ return D.performance.total_cost; }});
+  new Chart(ctx('chart-perf-dollar'), {{
+    type: 'line',
+    data: {{
+      labels: dates,
+      datasets: [
+        {{
+          label: 'Portfolio Value',
+          data: D.performance.portfolio_value,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,.08)',
+          fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5,
+        }},
+        {{
+          label: 'If Invested in SPY',
+          data: D.performance.spy_value,
+          borderColor: '#f59e0b',
+          borderDash: [5, 4],
+          fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+        }},
+        {{
+          label: 'Total Cost Basis',
+          data: costLine,
+          borderColor: '#ef4444',
+          borderDash: [2, 3],
+          fill: false, tension: 0, pointRadius: 0, borderWidth: 1,
+        }},
+      ],
+    }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      interaction: {{ mode: 'index', intersect: false }},
+      plugins: {{
+        legend: {{ labels: {{ color: '#94a3b8', font: {{ size: 12 }}, boxWidth: 16 }} }},
+        tooltip: {{ callbacks: {{ label: function(c) {{ return ' ' + c.dataset.label + ': ' + fmtUSD(c.raw); }} }} }},
+      }},
+      scales: {{
+        x: {{ grid: {{ color: '#1c2d45' }}, ticks: {{ color: '#94a3b8', maxTicksLimit: 8 }} }},
+        y: {{ grid: {{ color: '#1c2d45' }}, ticks: {{ color: '#94a3b8', callback: function(v){{ return '$' + v.toLocaleString(); }} }} }},
+      }},
+    }},
+  }});
+}})();
+
+// 4. Individual stock growth
 (function() {{
   var datasets = [];
   var i = 0;
@@ -617,11 +751,16 @@ def main():
     print("Running portfolio optimization...")
     optimal_weights = optimize_portfolio(tickers, mean_returns, cov_matrix)
 
+    # Actual performance comparison
+    print("Calculating actual portfolio performance vs SPY...")
+    performance = fetch_historical_performance(HOLDINGS, PURCHASE_PRICES)
+
     # Generate HTML
     print("\nGenerating HTML dashboard...")
     output = generate_html_report(
         portfolio_data, prices, current_weights, optimal_weights,
         tickers, mean_returns, cov_matrix, hist_data, SECTORS,
+        performance=performance,
     )
 
     print(f"\nDashboard saved: {output}")
@@ -630,6 +769,7 @@ def main():
     print("=" * 60)
     print(f"\nYour dashboard includes:")
     print("  - Real-time prices from Yahoo Finance")
+    print("  - Actual portfolio P&L vs SPY comparison")
     print("  - Portfolio optimization analysis")
     print("  - Sector concentration chart")
     print("  - Current vs optimal allocation")
