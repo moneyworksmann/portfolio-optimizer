@@ -275,6 +275,24 @@ function renderDashboard(data) {
   drawPerf(performance);
   drawPnl(h);
   renderHoldingsTable(h, 'value');
+
+  // Tickers with no price history still appear in the table at cost basis, but
+  // they are excluded from the optimizer and PRISM — say so rather than letting
+  // the numbers quietly disagree with the holdings list.
+  const dropped = (data.meta && data.meta.dropped_tickers) || [];
+  const noteEl = document.getElementById('dash-note');
+  if (dropped.length) {
+    noteEl.style.display = 'block';
+    noteEl.textContent =
+      `No price history for ${dropped.join(', ')}. ` +
+      `${dropped.length > 1 ? 'These are' : 'This is'} shown at cost basis and ` +
+      `excluded from optimization and PRISM.`;
+  } else {
+    noteEl.style.display = 'none';
+  }
+
+  renderOptimization(data.optimization);
+  renderPrism(data.prism);
 }
 
 // ── Chart: Sector doughnut ───────────────────────────────────────
@@ -570,4 +588,325 @@ async function post(url, body, isFormData) {
   if (!isFormData) opts.headers = { 'Content-Type': 'application/json' };
   const res = await fetch(url, opts);
   return res.json();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//  Optimization  (max-Sharpe allocation, 1y window)
+// ═══════════════════════════════════════════════════════════════════
+
+const STRATEGY_LABELS = {
+  current: 'Current',
+  optimal: 'Optimal',
+  equal_weight: 'Equal Weight',
+};
+
+function renderOptimization(opt) {
+  const body = document.getElementById('opt-body');
+  const note = document.getElementById('opt-unavailable');
+
+  if (!opt || !opt.available) {
+    body.style.display = 'none';
+    note.style.display = 'block';
+    note.textContent = (opt && opt.reason) || 'Optimization unavailable.';
+    return;
+  }
+
+  body.style.display = '';
+  note.style.display = 'none';
+
+  // KPI row: one card per strategy.
+  const kpis = document.getElementById('opt-kpis');
+  kpis.innerHTML = '';
+  ['current', 'optimal', 'equal_weight'].forEach(key => {
+    const s = opt.strategies[key];
+    const card = document.createElement('div');
+    card.className = 'card kpi' + (key === 'optimal' ? ' kpi-accent' : '');
+    card.innerHTML = `
+      <div class="kpi-label">${STRATEGY_LABELS[key]}</div>
+      <div class="kpi-val">${s.sharpe.toFixed(2)}</div>
+      <div class="kpi-sub">Sharpe · ${s.annual_return.toFixed(1)}% return · ${s.annual_risk.toFixed(1)}% vol</div>`;
+    kpis.appendChild(card);
+  });
+
+  if (opt.sharpe_improvement) {
+    const card = document.createElement('div');
+    card.className = 'card kpi';
+    const cls = opt.sharpe_improvement >= 0 ? 'green' : 'red';
+    card.innerHTML = `
+      <div class="kpi-label">Sharpe Headroom</div>
+      <div class="kpi-val ${cls}">${fmtPct(opt.sharpe_improvement)}</div>
+      <div class="kpi-sub">optimal vs current · cap ${opt.max_position_pct}% per name</div>`;
+    kpis.appendChild(card);
+  }
+
+  drawAllocation(opt);
+  drawSensitivity(opt.sensitivity);
+  drawScatter(opt.scatter);
+}
+
+function drawAllocation(opt) {
+  destroyChart('alloc');
+  const current = opt.strategies.current.weights;
+  const optimal = opt.strategies.optimal.weights;
+
+  // Order by optimal weight so the biggest recommended positions read first.
+  const tickers = [...opt.tickers].sort((a, b) => (optimal[b] || 0) - (optimal[a] || 0)).slice(0, 12);
+
+  charts.alloc = new Chart(ctx('chart-alloc'), {
+    type: 'bar',
+    data: {
+      labels: tickers,
+      datasets: [
+        { label: 'Current', data: tickers.map(t => current[t] || 0), backgroundColor: '#64748b' },
+        { label: 'Optimal', data: tickers.map(t => optimal[t] || 0), backgroundColor: '#38bdf8' },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${c.raw.toFixed(2)}%` } },
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } },
+        y: {
+          ticks: { color: '#94a3b8', font: { size: 10 }, callback: v => v + '%' },
+          grid: { color: 'rgba(148,163,184,.12)' },
+        },
+      },
+    },
+  });
+}
+
+function drawSensitivity(sensitivity) {
+  destroyChart('sensitivity');
+  const labels = Object.keys(sensitivity);
+
+  charts.sensitivity = new Chart(ctx('chart-sensitivity'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: labels.map(k => sensitivity[k]),
+        backgroundColor: labels.map(k => (k === 'Optimal' ? '#38bdf8' : '#64748b')),
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => ` ${c.raw.toFixed(2)}% expected annual return` } },
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { display: false } },
+        y: {
+          ticks: { color: '#94a3b8', font: { size: 10 }, callback: v => v + '%' },
+          grid: { color: 'rgba(148,163,184,.12)' },
+        },
+      },
+    },
+  });
+}
+
+function drawScatter(points) {
+  destroyChart('scatter');
+  if (!points || !points.length) return;
+
+  charts.scatter = new Chart(ctx('chart-scatter'), {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        data: points.map(p => ({ x: p.risk, y: p.ret, ticker: p.ticker, weight: p.weight })),
+        backgroundColor: '#38bdf8',
+        // Bubble size tracks position weight, so concentration is visible.
+        pointRadius: c => Math.max(4, Math.min(16, (c.raw.weight || 0) / 2 + 4)),
+        pointHoverRadius: c => Math.max(6, Math.min(18, (c.raw.weight || 0) / 2 + 6)),
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: c => ` ${c.raw.ticker}: ${c.raw.y.toFixed(1)}% return, ` +
+                        `${c.raw.x.toFixed(1)}% vol, ${c.raw.weight.toFixed(1)}% weight`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Annualised volatility %', color: '#94a3b8', font: { size: 10 } },
+          ticks: { color: '#94a3b8', font: { size: 10 } },
+          grid: { color: 'rgba(148,163,184,.12)' },
+        },
+        y: {
+          title: { display: true, text: 'Annualised return %', color: '#94a3b8', font: { size: 10 } },
+          ticks: { color: '#94a3b8', font: { size: 10 } },
+          grid: { color: 'rgba(148,163,184,.12)' },
+        },
+      },
+    },
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//  PRISM  (risk health, 5y window)
+// ═══════════════════════════════════════════════════════════════════
+
+const PRISM_DIMENSIONS = [
+  { key: 'F', label: 'Diversification', hint: 'spread across sectors' },
+  { key: 'I', label: 'Correlation',     hint: 'do holdings move together' },
+  { key: 'N', label: 'Volatility',      hint: 'annualised swing' },
+  { key: 'E', label: 'Concentration',   hint: 'largest single position' },
+];
+
+function scoreColor(v) {
+  if (v >= 70) return '#22c55e';
+  if (v >= 40) return '#eab308';
+  return '#ef4444';
+}
+
+function renderPrism(prism) {
+  const body = document.getElementById('prism-body');
+  const note = document.getElementById('prism-unavailable');
+
+  if (!prism || !prism.available) {
+    body.style.display = 'none';
+    note.style.display = 'block';
+    note.textContent = (prism && prism.reason) || 'PRISM unavailable.';
+    return;
+  }
+
+  body.style.display = '';
+  note.style.display = 'none';
+
+  const scoreEl = document.getElementById('prism-score');
+  scoreEl.textContent = prism.prism_score.toFixed(1);
+  scoreEl.style.color = scoreColor(prism.prism_score);
+
+  // Sub-score bars
+  const bars = document.getElementById('prism-bars');
+  bars.innerHTML = '';
+  PRISM_DIMENSIONS.forEach(d => {
+    const v = prism.sub_scores[d.key];
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <div class="bar-label">${d.label}<span class="bar-hint">${d.hint}</span></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${v}%;background:${scoreColor(v)}"></div></div>
+      <div class="bar-val">${v.toFixed(1)}</div>`;
+    bars.appendChild(row);
+  });
+
+  // Benchmark comparison
+  const bench = document.getElementById('prism-benchmarks');
+  bench.innerHTML = '';
+  Object.values(prism.benchmarks).forEach(b => {
+    const delta = prism.prism_score - b.score;
+    const cls = delta >= 0 ? 'green' : 'red';
+    const row = document.createElement('div');
+    row.className = 'bench-row';
+    row.innerHTML = `
+      <span class="bench-label">${b.label}</span>
+      <span class="bench-score">${b.score.toFixed(1)}</span>
+      <span class="bench-delta ${cls}">${fmtPct(delta).replace('%', '')}</span>`;
+    bench.appendChild(row);
+  });
+
+  document.getElementById('prism-callout').textContent = prism.callout;
+
+  renderCorrelation(prism.correlation_matrix);
+  renderPrismStats(prism.backtest);
+  drawPrismBacktest(prism.backtest);
+}
+
+function renderCorrelation(matrix) {
+  const table = document.getElementById('tbl-corr');
+  if (!matrix || !matrix.tickers.length) { table.innerHTML = ''; return; }
+
+  const t = matrix.tickers;
+  let html = '<thead><tr><th></th>' + t.map(x => `<th>${x}</th>`).join('') + '</tr></thead><tbody>';
+
+  t.forEach((rowTicker, i) => {
+    html += `<tr><th>${rowTicker}</th>`;
+    t.forEach((_, j) => {
+      const v = matrix.values[i][j];
+      // Red = moves together, blue = moves apart. Opacity tracks magnitude.
+      const alpha = Math.min(0.85, Math.abs(v) * 0.85);
+      const rgb = v >= 0 ? '239,68,68' : '56,189,248';
+      html += `<td style="background:rgba(${rgb},${alpha})" title="${rowTicker} vs ${t[j]}">${v.toFixed(2)}</td>`;
+    });
+    html += '</tr>';
+  });
+
+  table.innerHTML = html + '</tbody>';
+}
+
+function renderPrismStats(backtest) {
+  const el = document.getElementById('prism-stats');
+  el.innerHTML = '';
+  if (!backtest || !backtest.stats || backtest.stats.portfolio_ann_return === undefined) {
+    el.innerHTML = '<p class="sub">Not enough history for a 5-year comparison.</p>';
+    return;
+  }
+
+  const s = backtest.stats;
+  const rows = [
+    ['Portfolio annualised', fmtPct(s.portfolio_ann_return), colorCls(s.portfolio_ann_return)],
+    ['SPY annualised', fmtPct(s.spy_ann_return), colorCls(s.spy_ann_return)],
+    ['Portfolio max drawdown', fmtPct(s.portfolio_max_drawdown), 'red'],
+    ['SPY max drawdown', fmtPct(s.spy_max_drawdown), 'red'],
+  ];
+
+  rows.forEach(([label, value, cls]) => {
+    const div = document.createElement('div');
+    div.className = 'stat-cell';
+    div.innerHTML = `<div class="kpi-label">${label}</div><div class="stat-val ${cls}">${value}</div>`;
+    el.appendChild(div);
+  });
+}
+
+function drawPrismBacktest(backtest) {
+  destroyChart('prismBacktest');
+  if (!backtest || !backtest.dates.length) return;
+
+  charts.prismBacktest = new Chart(ctx('chart-prism-backtest'), {
+    type: 'line',
+    data: {
+      labels: backtest.dates,
+      datasets: [
+        {
+          label: 'Portfolio', data: backtest.portfolio, borderColor: '#38bdf8',
+          backgroundColor: 'rgba(56,189,248,.12)', fill: true, tension: .3,
+          pointRadius: 0, borderWidth: 2,
+        },
+        {
+          label: 'SPY', data: backtest.spy, borderColor: '#94a3b8',
+          borderDash: [5, 4], fill: false, tension: .3, pointRadius: 0, borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: $${c.raw.toFixed(2)} per $1` } },
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 10 }, grid: { display: false } },
+        y: {
+          ticks: { color: '#94a3b8', font: { size: 10 }, callback: v => '$' + v.toFixed(1) },
+          grid: { color: 'rgba(148,163,184,.12)' },
+        },
+      },
+    },
+  });
 }

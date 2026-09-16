@@ -3,6 +3,7 @@ yfinance>=0.2.40
 pandas>=2.0
 numpy>=1.26
 scipy>=1.12
-# Optional — needed only for screenshot parsing:
+
+# Optional — brokerage screenshot (OCR) ingest only:
 # pytesseract>=0.3.10
 # pillow>=10.0

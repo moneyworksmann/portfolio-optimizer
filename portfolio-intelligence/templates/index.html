@@ -129,6 +129,8 @@
         <p id="dash-timestamp" class="sub"></p>
       </div>
 
+      <div id="dash-note" class="msg info" style="display:none"></div>
+
       <div class="cards-grid">
         <div class="card kpi">
           <div class="kpi-label">Total Value</div>
@@ -179,7 +181,72 @@
           <h3>P&amp;L by Position</h3>
           <div class="chart-box"><canvas id="chart-pnl"></canvas></div>
         </div>
-        <div class="card chart-card" style="display:flex;align-items:center;justify-content:center">
+        <div class="card chart-card">
+          <h3>Risk vs Return &nbsp;<span class="badge">1 Year</span></h3>
+          <div class="chart-box"><canvas id="chart-scatter"></canvas></div>
+        </div>
+      </div>
+
+      <!-- PRISM risk health -->
+      <div class="section-head" id="prism-section">
+        <h2>Risk Health</h2>
+        <p class="sub">PRISM scores your book on four dimensions, 0–100. Higher is healthier.</p>
+      </div>
+
+      <div id="prism-unavailable" class="msg info" style="display:none"></div>
+
+      <div id="prism-body">
+        <div class="charts-row two-col">
+          <div class="card">
+            <div class="prism-head">
+              <div class="prism-score-wrap">
+                <div class="prism-score" id="prism-score">—</div>
+                <div class="kpi-label">PRISM Score</div>
+              </div>
+              <div class="prism-benchmarks" id="prism-benchmarks"></div>
+            </div>
+            <div class="prism-bars" id="prism-bars"></div>
+            <div class="prism-callout" id="prism-callout"></div>
+          </div>
+
+          <div class="card chart-card">
+            <h3>Correlation Matrix &nbsp;<span class="badge">5 Year</span></h3>
+            <div class="matrix-scroll"><table id="tbl-corr" class="matrix"></table></div>
+          </div>
+        </div>
+
+        <div class="charts-row two-col">
+          <div class="card chart-card">
+            <h3>Growth of $1 vs SPY &nbsp;<span class="badge">5 Year</span></h3>
+            <div class="chart-box"><canvas id="chart-prism-backtest"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Drawdown &amp; Annualised Return</h3>
+            <div class="stat-grid" id="prism-stats"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Optimization -->
+      <div class="section-head" id="opt-section">
+        <h2>Optimization</h2>
+        <p class="sub">Max-Sharpe allocation under a long-only, single-name cap, on one year of returns.</p>
+      </div>
+
+      <div id="opt-unavailable" class="msg info" style="display:none"></div>
+
+      <div id="opt-body">
+        <div class="cards-grid" id="opt-kpis"></div>
+
+        <div class="charts-row two-col">
+          <div class="card chart-card">
+            <h3>Current vs Optimal Allocation</h3>
+            <div class="chart-box"><canvas id="chart-alloc"></canvas></div>
+          </div>
+          <div class="card chart-card">
+            <h3>Expected Annual Return by Strategy</h3>
+            <div class="chart-box"><canvas id="chart-sensitivity"></canvas></div>
+          </div>
         </div>
       </div>
 

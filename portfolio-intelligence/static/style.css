@@ -416,3 +416,99 @@ td input[type="text"]:focus, td input[type="number"]:focus {
   .kpi-val    { font-size: 20px; }
   .manual-row { flex-wrap: wrap; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Merged sections: PRISM risk health + optimization
+   ═══════════════════════════════════════════════════════════════════ */
+
+.section-head {
+  margin: 38px 0 16px;
+  padding-top: 26px;
+  border-top: 1px solid var(--border);
+}
+.section-head h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.section-head .sub { font-size: 13px; color: var(--sub); }
+
+/* Highlight the recommended strategy card */
+.kpi-accent { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(59, 130, 246, .25); }
+
+/* ── PRISM score block ── */
+.prism-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.prism-score-wrap { text-align: left; }
+.prism-score { font-size: 52px; font-weight: 800; line-height: 1; letter-spacing: -1px; }
+
+.prism-benchmarks { display: flex; flex-direction: column; gap: 6px; min-width: 210px; }
+.bench-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 5px 9px;
+  background: var(--surface2);
+  border-radius: var(--r-sm);
+}
+.bench-label { color: var(--sub); }
+.bench-score { font-weight: 600; font-variant-numeric: tabular-nums; }
+.bench-delta { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ── Sub-score bars ── */
+.prism-bars { display: flex; flex-direction: column; gap: 13px; }
+.bar-row {
+  display: grid;
+  grid-template-columns: 175px 1fr 42px;
+  gap: 12px;
+  align-items: center;
+}
+.bar-label { font-size: 13px; font-weight: 500; display: flex; flex-direction: column; }
+.bar-hint { font-size: 10px; color: var(--dim); font-weight: 400; margin-top: 1px; }
+.bar-track { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width .5s ease; }
+.bar-val { font-size: 13px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+
+.prism-callout {
+  margin-top: 20px;
+  padding: 13px 15px;
+  background: var(--surface2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* ── Correlation matrix ── */
+.matrix-scroll { overflow-x: auto; }
+.matrix { border-collapse: collapse; font-size: 11px; width: 100%; }
+.matrix th {
+  color: var(--sub);
+  font-weight: 600;
+  padding: 5px 7px;
+  text-align: center;
+  white-space: nowrap;
+}
+.matrix td {
+  padding: 7px 6px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  border-radius: 3px;
+  color: var(--text);
+}
+
+/* ── Backtest stats ── */
+.stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 6px; }
+.stat-cell { padding: 13px; background: var(--surface2); border-radius: var(--r-sm); }
+.stat-val { font-size: 21px; font-weight: 700; margin-top: 5px; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 720px) {
+  .bar-row { grid-template-columns: 120px 1fr 38px; }
+  .stat-grid { grid-template-columns: 1fr; }
+  .prism-benchmarks { min-width: 100%; }
+}
