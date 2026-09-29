@@ -63,7 +63,7 @@ def stats(weights, mean_returns, cov_matrix) -> tuple:
     return ret, risk, sharpe
 
 
-def analyse(md, current_weights: dict) -> dict:
+def analyse(md, current_weights: dict, total_value: float = 0.0) -> dict:
     """Compare current, optimal and equal-weight allocations on a 1y window."""
     tickers = [t for t in md.valid if t in current_weights]
     if len(tickers) < 2:
@@ -116,9 +116,65 @@ def analyse(md, current_weights: dict) -> dict:
                 'weight': round(float(weight) * 100, 2),
             })
 
+    # ── suggested changes: the trades that turn today's mix into the optimal one ──
+    trades = []
+    for t, cw, ow in zip(tickers, current, optimal):
+        delta = float(ow - cw)
+        price = md.latest.get(t)
+        dollars = delta * total_value if total_value else None
+        if abs(delta) < 0.005:
+            action = 'Keep'
+        elif ow < 0.005:
+            action = 'Exit'
+        elif delta > 0:
+            action = 'Add'
+        else:
+            action = 'Trim'
+        trades.append({
+            'ticker': t, 'action': action,
+            'current_pct': round(float(cw) * 100, 2), 'target_pct': round(float(ow) * 100, 2),
+            'change_pct': round(delta * 100, 2),
+            'dollars': round(dollars, 2) if dollars is not None else None,
+            'shares': round(dollars / price, 4) if dollars is not None and price else None,
+            'price': round(price, 2) if price else None,
+            'exp_return_pct': round(float(mean_returns.get(t, 0.0)) * TRADING_DAYS * 100, 2),
+        })
+    order = {'Add': 0, 'Trim': 1, 'Exit': 2, 'Keep': 3}
+    trades.sort(key=lambda r: (order[r['action']], -abs(r['change_pct'])))
+
+    cur_s, opt_s = strategies['current'], strategies['optimal']
+    impact = {
+        'return_now_pct': cur_s['annual_return'], 'return_after_pct': opt_s['annual_return'],
+        'risk_now_pct': cur_s['annual_risk'], 'risk_after_pct': opt_s['annual_risk'],
+        'sharpe_now': cur_s['sharpe'], 'sharpe_after': opt_s['sharpe'],
+        'dollars_per_year_now': round(total_value * cur_s['annual_return'] / 100, 2) if total_value else None,
+        'dollars_per_year_after': round(total_value * opt_s['annual_return'] / 100, 2) if total_value else None,
+        'turnover_pct': round(sum(abs(r['change_pct']) for r in trades) / 2, 2),
+    }
+
+    # Growth of $1 over the same year: today's weights vs the suggested ones vs SPY.
+    growth = {'dates': [], 'current': [], 'optimal': [], 'spy': []}
+    window = md.closes_window(TRADING_DAYS)
+    if not window.empty:
+        rets = window[tickers].pct_change().dropna()
+        if not rets.empty:
+            cur_curve = (1 + rets.values @ current).cumprod()
+            opt_curve = (1 + rets.values @ optimal).cumprod()
+            step = max(1, len(rets) // 90)
+            growth['dates'] = list(rets.index.strftime('%Y-%m-%d'))[::step]
+            growth['current'] = [round(float(v), 4) for v in cur_curve][::step]
+            growth['optimal'] = [round(float(v), 4) for v in opt_curve][::step]
+            if md.BENCHMARK in window.columns:
+                spy = window[md.BENCHMARK].reindex(rets.index)
+                spy_curve = (spy / float(window[md.BENCHMARK].iloc[0])).values
+                growth['spy'] = [round(float(v), 4) for v in spy_curve][::step]
+
     return {
         'available': True,
         'tickers': tickers,
+        'trades': trades,
+        'impact': impact,
+        'growth': growth,
         'strategies': strategies,
         'sharpe_improvement': improvement,
         'sensitivity': {

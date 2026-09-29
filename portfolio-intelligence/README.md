@@ -44,17 +44,47 @@ hits you hard."
 
 ---
 
+## What it does now
+
+**Bring holdings in any form.** Drop several files at once, or paste a Google Sheets link:
+CSV/TSV, Excel (`.xlsx`, `.xls`), Numbers/LibreOffice (`.ods`), JSON, PDF statements, Word
+(`.docx`) and screenshots. One table detector finds the header row even when a title block sits
+above it (like the Google Finance tracker template) and maps columns such as *Symbol*, *# shares*,
+*Avg cost / Total cost* and *Date of acquisition*. A “Total Cost” column that really holds a cost
+per share is detected from the price and return columns and read correctly. Each row is kept as
+its own purchase, so the same ticker bought on two dates stays two lots.
+
+**Review, with dates.** Every purchase has an editable acquisition date; rows without one are
+highlighted, because the date unlocks the “since you bought” views.
+
+**One dashboard at a time.** Results are a scrolling story. Each chapter pairs one dashboard with
+a plain-language panel: what it shows, how to read it, and what it means for you. Charts draw as
+you arrive, the side rail tracks where you are, and the rest dims so there is one thing to read.
+
+| Chapter | What it answers |
+|---|---|
+| Where you stand | Value, cost, gain and weight of each holding today |
+| Your journey | Day by day from your first purchase: value vs money put in vs the same purchases in SPY |
+| Each purchase | Return of every lot since its own acquisition date (and per year, for 60+ day holds) |
+| Best possible exits | For every lot, the highest price reached after you bought it: what selling at each peak would have given, the gap to today, and how much of the best case you kept |
+| Where it’s planted | Sector mix |
+| The last 12 months | Current holdings vs SPY over a year |
+| Risk health | PRISM score, its four parts, and the correlation grid |
+| Suggested changes | Its own dashboard: the trades (add / trim / exit, in % , $ and shares) that turn today’s mix into the max-Sharpe mix, expected return and $/year before and after, risk and Sharpe change, and a year replayed with both mixes |
+| Every holding | The full table per purchase |
+
 ## Architecture
 
 ```
 app.py                  Flask routes — thin, no business logic
 core/
+  hindsight.py          since-acquisition returns, peak (best-exit) values, daily timeline
   market_data.py        one download per request; every consumer reads a slice
-  ingest.py             CSV + screenshot OCR -> holdings
+  ingest.py             any file / Google Sheet -> purchases (ticker, shares, cost, date)
   portfolio.py          values, cost basis, P&L, weights, SPY comparison
   optimizer.py          max-Sharpe allocation, sensitivity, risk-return scatter
   prism.py              four risk sub-scores, benchmarks, callout
-templates/ static/      dashboard UI
+templates/ static/      dashboard UI: Overview · Performance · Risk Health · Efficiency · Holdings
 ```
 
 ### The market-data layer
@@ -121,11 +151,11 @@ matrix reproduce exactly, and optimal weights match to within 2e-15.
 **`POST /api/analyze`**
 
 ```json
-{ "holdings": [ { "ticker": "AAPL", "shares": 40, "avg_cost": 150.00 } ] }
+{ "holdings": [ { "ticker": "AAPL", "shares": 40, "avg_cost": 150.00, "acquired": "2024-03-01" } ] }
 ```
 
 Returns `summary`, `holdings`, `sector_allocation`, `performance`,
-`optimization`, `prism` and `meta`.
+`optimization` (now with `trades`, `impact`, `growth`), `prism`, `hindsight` and `meta`.
 
 `optimization` and `prism` each carry an `available` flag. Both need at least two
 holdings with usable price history, and degrade with a `reason` string rather
@@ -135,7 +165,9 @@ from the risk analytics — the dashboard says so explicitly rather than letting
 the numbers quietly disagree. `meta` also reports elapsed time and the number of
 network fetches the request actually cost.
 
-**`POST /api/parse/csv`** — multipart upload, returns parsed holdings.
+**`POST /api/parse`** — multipart `files` (any number, any supported format) and/or `sheet_url`; returns purchases with `ticker, shares, avg_cost, acquired, name, source`, plus notes.
+
+**`POST /api/parse/csv`** — legacy single-CSV upload.
 
 **`POST /api/parse/screenshot`** — multipart image upload, OCR, returns parsed
 holdings with a review warning.

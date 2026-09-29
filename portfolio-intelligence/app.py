@@ -5,9 +5,11 @@ Portfolio Intelligence Platform — Flask server.
 Routes
   GET  /                      dashboard UI
   GET  /api/health            liveness probe
-  POST /api/parse/csv         brokerage CSV -> holdings
+  POST /api/parse             files (csv/xlsx/ods/json/pdf/docx/images) and/or a
+                              Google Sheets link -> holdings with acquisition dates
+  POST /api/parse/csv         legacy single-CSV route
   POST /api/parse/screenshot  brokerage screenshot -> holdings (OCR)
-  POST /api/analyze           holdings -> P&L, optimization, PRISM
+  POST /api/analyze           holdings -> P&L, optimization, PRISM, since-you-bought
 
 One POST /api/analyze builds a single MarketData object and passes it to the
 valuation, optimizer and PRISM layers in turn. Before the merge this was two
@@ -20,7 +22,7 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 
-from core import ingest, optimizer, portfolio, prism
+from core import hindsight, ingest, optimizer, portfolio, prism
 from core.market_data import MarketData, counters, reset_counters
 
 app = Flask(__name__)
@@ -41,42 +43,48 @@ def health():
 
 # ── ingest ───────────────────────────────────────────────────────────────────
 
+@app.route('/api/parse', methods=['POST'])
+def parse_any():
+    """Any number of files (CSV, Excel, Sheets export, JSON, PDF, Word, images)
+    and/or a Google Sheets link -> one combined list of holdings."""
+    holdings, notes, errors = [], [], []
+    for f in request.files.getlist('files'):
+        try:
+            h, n = ingest.parse_file(f.filename or 'file', f.read())
+            for x in h:
+                x['source'] = f.filename
+            holdings.extend(h)
+            notes.extend(n)
+        except ingest.IngestError as e:
+            errors.append(str(e))
+        except Exception as e:  # a malformed file shouldn't sink the others
+            errors.append(f'{f.filename}: {e}')
+    url = (request.form.get('sheet_url') or '').strip()
+    if url:
+        try:
+            h, n = ingest.parse_sheet_url(url)
+            for x in h:
+                x['source'] = 'Google Sheet'
+            holdings.extend(h)
+            notes.extend(n)
+        except ingest.IngestError as e:
+            errors.append(str(e))
+    if not holdings:
+        return jsonify({'error': ' '.join(errors) or 'No files received.'}), 400
+    return jsonify({'holdings': holdings, 'notes': notes, 'errors': errors})
+
+
 @app.route('/api/parse/csv', methods=['POST'])
 def parse_csv():
+    """Kept for old clients; /api/parse handles every format."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-
+    f = request.files['file']
     try:
-        content = request.files['file'].read().decode('utf-8', errors='replace')
-        return jsonify({'holdings': ingest.parse_csv(content)})
+        h, n = ingest.parse_file(f.filename or 'upload.csv', f.read())
+        return jsonify({'holdings': h, 'notes': n})
     except ingest.IngestError as e:
         return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-
-@app.route('/api/parse/screenshot', methods=['POST'])
-def parse_screenshot():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-
-    try:
-        holdings = ingest.parse_screenshot(request.files['file'].read())
-    except ingest.IngestError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-    if not holdings:
-        return jsonify({
-            'holdings': [],
-            'note': 'Could not extract holdings automatically. Please add them manually.',
-        })
-
-    return jsonify({
-        'holdings': holdings,
-        'note': 'Review and correct the parsed data — OCR may have errors.',
-    })
 
 
 # ── analyze ──────────────────────────────────────────────────────────────────
@@ -87,7 +95,8 @@ def analyze():
     reset_counters()
 
     body = request.get_json(force=True, silent=True) or {}
-    shares, purchase_prices = ingest.normalise(body.get('holdings', []))
+    lots = ingest.clean_lots(body.get('holdings', []))
+    shares, purchase_prices = ingest.normalise(lots)
 
     if not shares:
         return jsonify({'error': 'No holdings provided'}), 400
@@ -122,8 +131,9 @@ def analyze():
             k: round(v, 2) for k, v in portfolio.sector_allocation(book, md.sectors).items()
         },
         'performance': portfolio.performance_vs_benchmark(md, shares, purchase),
-        'optimization': optimizer.analyse(md, weights),
+        'optimization': optimizer.analyse(md, weights, book['total_value']),
         'prism': prism.compute(md, weights),
+        'hindsight': _hindsight(lots, md),
         'meta': {
             'dropped_tickers': md.dropped,
             'elapsed_ms': int((time.time() - started) * 1000),
@@ -132,6 +142,13 @@ def analyze():
     }
 
     return jsonify(payload)
+
+
+def _hindsight(lots, md):
+    try:
+        return hindsight.analyse([l for l in lots if l['ticker'] in md.valid], md.sectors)
+    except Exception as e:  # never let the history view sink the whole analysis
+        return {'available': False, 'reason': f'Could not build the since-you-bought view: {e}'}
 
 
 # ── entry ────────────────────────────────────────────────────────────────────
