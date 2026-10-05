@@ -489,6 +489,8 @@ function chRisk(d) {
 }
 
 // ── Chapter 8: suggested changes (its own dashboard) ─────────────
+let candidateTickers = [];
+
 function chSuggest(d) {
   const o = d.optimization;
   if (!o?.available) return null;
@@ -519,7 +521,21 @@ function chSuggest(d) {
       <div class="panel" style="margin-top:16px"><h3>The trades</h3><p class="hint">Dollar and share amounts use today’s value and prices</p>
         <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th class="num">$ amount</th><th class="num">Shares</th><th class="num">Exp. return</th></tr></thead><tbody>
         ${o.trades.map((t) => `<tr><td><b>${esc(t.ticker)}</b></td><td><span class="pill pill-${t.action.toLowerCase()}">${t.action}</span></td><td class="num">${t.current_pct.toFixed(1)}%</td><td class="num">${t.target_pct.toFixed(1)}%</td><td class="num ${t.change_pct >= 0 ? 'up' : 'down'}">${t.change_pct >= 0 ? '+' : ''}${t.change_pct.toFixed(1)} pts</td><td class="num">${t.dollars != null ? signUsd(t.dollars) : '—'}</td><td class="num">${t.shares != null ? (t.shares >= 0 ? '+' : '') + t.shares.toFixed(3) : '—'}</td><td class="num">${pct(t.exp_return_pct)}</td></tr>`).join('')}
-        </tbody></table></div></div>`,
+        </tbody></table></div></div>
+
+      <div class="panel candidate-panel" style="margin-top:24px">
+        <h3>Considering new stocks?</h3>
+        <p class="hint">Add tickers you are thinking about buying. We will re-run the optimizer with them in the mix and show how they would change your allocation and PRISM score.</p>
+        <div class="candidate-row">
+          <input type="text" id="candidate-input" placeholder="e.g. TSLA" maxlength="8" />
+          <button id="btn-add-candidate" class="btn">+ Add</button>
+          <button id="btn-reoptimize" class="btn btn-primary" style="display:none">Re-optimize with these &#8594;</button>
+        </div>
+        <div id="candidate-chips" class="file-chips"></div>
+        <div id="reopt-loading" class="loading-wrap" style="display:none"><div class="spinner"></div><p>Running optimizer with new stocks&#8230;</p><p class="sub">Downloading price history for candidates</p></div>
+        <div id="reopt-msg" class="msg" style="display:none"></div>
+        <div id="reopt-results"></div>
+      </div>`,
     draw: () => {
       const g = o.growth;
       if (g.dates.length) mk('growth', 'c-growth', {
@@ -533,9 +549,160 @@ function chSuggest(d) {
         data: { labels: tk.map((t) => t.ticker), datasets: [{ label: 'Today', data: tk.map((t) => t.current_pct), backgroundColor: '#cfd8c8', borderRadius: 5 }, { label: 'Suggested', data: tk.map((t) => t.target_pct), backgroundColor: C.leaf, borderRadius: 5 }] },
         options: { plugins: { tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${c.raw.toFixed(1)}%` } } }, scales: { x: { grid: { display: false } }, y: { grid: { color: C.line }, ticks: { callback: (v) => v + '%' } } } },
       });
+      initCandidates();
     },
   };
 }
+
+
+function initCandidates() {
+  const input = $('candidate-input'), addBtn = $('btn-add-candidate'), reoptBtn = $('btn-reoptimize');
+  if (!input) return;
+  input.addEventListener('input', function() { input.value = input.value.toUpperCase(); });
+  input.addEventListener('keydown', function(e) { if (e.key === 'Enter') addCandidate(); });
+  addBtn.addEventListener('click', addCandidate);
+  reoptBtn.addEventListener('click', runReoptimize);
+  renderCandidateChips();
+}
+
+function addCandidate() {
+  var input = $('candidate-input');
+  var ticker = input.value.trim().toUpperCase();
+  if (!ticker) return;
+  var existing = new Set(holdings.map(function(h) { return h.ticker; }));
+  if (existing.has(ticker)) { showMsg('reopt-msg', ticker + ' is already in your portfolio.'); return; }
+  if (candidateTickers.includes(ticker)) { showMsg('reopt-msg', ticker + ' is already added.'); return; }
+  clearMsg('reopt-msg');
+  candidateTickers.push(ticker);
+  input.value = '';
+  input.focus();
+  renderCandidateChips();
+}
+
+window.removeCandidate = function(i) { candidateTickers.splice(i, 1); renderCandidateChips(); };
+
+function renderCandidateChips() {
+  var container = $('candidate-chips');
+  if (!container) return;
+  container.innerHTML = candidateTickers.map(function(t, i) {
+    return '<span class="file-chip candidate-chip">' + esc(t) + ' <button title="Remove" onclick="removeCandidate(' + i + ')">x</button></span>';
+  }).join('');
+  var btn = $('btn-reoptimize');
+  if (btn) btn.style.display = candidateTickers.length ? 'inline-flex' : 'none';
+}
+
+async function runReoptimize() {
+  if (!candidateTickers.length) return;
+  clearMsg('reopt-msg');
+  $('reopt-loading').style.display = 'block';
+  $('btn-reoptimize').disabled = true;
+  $('reopt-results').innerHTML = '';
+
+  var valid = holdings.filter(function(h) { return h.ticker && +h.shares > 0; });
+  try {
+    var res = await fetch('/api/reoptimize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ holdings: valid, candidates: candidateTickers }),
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderReoptResults(data);
+  } catch (e) {
+    showMsg('reopt-msg', e.message);
+  } finally {
+    $('reopt-loading').style.display = 'none';
+    $('btn-reoptimize').disabled = false;
+  }
+}
+
+function renderReoptResults(data) {
+  var container = $('reopt-results');
+  var o = data.optimization;
+  var pc = data.prism_current;
+  var ps = data.prism_suggested;
+
+  if (!o || !o.available) {
+    container.innerHTML = '<div class="msg info">' + esc(o && o.reason || 'Could not run optimizer.') + '</div>';
+    return;
+  }
+
+  if (data.invalid_candidates && data.invalid_candidates.length) {
+    showMsg('reopt-msg', 'Could not find price data for: ' + data.invalid_candidates.join(', '), 'info');
+  }
+
+  var im = o.impact;
+  var moves = o.trades.filter(function(t) { return t.action !== 'Keep' || t.current_pct > 0; });
+  var newPicks = o.trades.filter(function(t) { return t.current_pct === 0 && t.target_pct > 0.5; });
+  var notUsed = data.candidates.filter(function(c) { return !newPicks.some(function(t) { return t.ticker === c; }); });
+
+  var prismHtml = '';
+  if (pc && pc.available && ps && ps.available) {
+    var delta = ps.prism_score - pc.prism_score;
+    var up = delta >= 0;
+    var dims = [['F', 'Diversification'], ['I', 'Independence'], ['N', 'Calm'], ['E', 'Balance']];
+    prismHtml = '<div class="panel" style="margin-top:16px">' +
+      '<h3>PRISM score impact</h3>' +
+      '<p class="hint">How the suggested mix (with new stocks) would change your risk health</p>' +
+      '<div class="grid g3" style="margin-top:12px">' +
+        kpi('Current PRISM', pc.prism_score.toFixed(0), 'your portfolio now', '#e8eef6') +
+        kpi('Suggested PRISM', ps.prism_score.toFixed(0), 'with changes applied', up ? C.mint : '#f6e3da') +
+        kpi('Change', '<span class="' + (up ? 'up' : 'down') + '">' + (delta >= 0 ? '+' : '') + delta.toFixed(1) + '</span>', up ? 'healthier' : 'riskier', up ? C.mint : '#f6e3da') +
+      '</div>' +
+      '<div style="margin-top:12px">' +
+        dims.map(function(d) {
+          var before = pc.sub_scores[d[0]], after = ps.sub_scores[d[0]], dd = after - before;
+          return '<div class="bar-row"><span><b>' + d[1] + '</b></span><span class="num">' +
+            before.toFixed(0) + ' → ' + after.toFixed(0) +
+            ' <span class="' + (dd >= 0 ? 'up' : 'down') + '" style="font-size:0.85em">(' + (dd >= 0 ? '+' : '') + dd.toFixed(1) + ')</span></span></div>';
+        }).join('') +
+      '</div></div>';
+  }
+
+  var newPicksHtml = '';
+  if (newPicks.length) {
+    newPicksHtml = '<div style="margin-top:8px">' + newPicks.map(function(t) {
+      return '<span class="file-chip" style="background:' + C.mint + ';border-color:' + C.leaf + '"><b>' +
+        esc(t.ticker) + '</b> — ' + t.target_pct.toFixed(1) + '% suggested, exp. return ' + pct(t.exp_return_pct) + '</span>';
+    }).join(' ') + '</div>';
+  }
+  if (notUsed.length) {
+    newPicksHtml += '<p class="sub" style="margin-top:8px">The optimizer did not include ' +
+      notUsed.map(esc).join(', ') + ' — their risk/return profile did not improve the mix.</p>';
+  }
+
+  container.innerHTML =
+    '<div style="margin-top:16px;padding-top:16px;border-top:2px solid ' + C.line + '">' +
+      '<h3>With ' + data.candidates.map(esc).join(', ') + ' in the mix</h3>' +
+      newPicksHtml +
+      '<div class="grid g4" style="margin-top:12px">' +
+        kpi('Expected return', pct(im.return_after_pct), 'from ' + pct(im.return_now_pct), C.mint) +
+        kpi('Per year', im.dollars_per_year_after != null ? usd(im.dollars_per_year_after) : '—', im.dollars_per_year_now != null ? 'from ' + usd(im.dollars_per_year_now) : '', '#f7efd9') +
+        kpi('Yearly swing', plainPct(im.risk_after_pct), 'from ' + plainPct(im.risk_now_pct), '#dcebf3') +
+        kpi('Sharpe', im.sharpe_after.toFixed(2), 'from ' + im.sharpe_now.toFixed(2), '#ece6f6') +
+      '</div>' +
+      prismHtml +
+      '<div class="panel" style="margin-top:16px"><h3>Updated trades</h3>' +
+        '<p class="hint">Includes your current holdings and the new candidates</p>' +
+        '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+          '<th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th>' +
+          '<th class="num">Change</th><th class="num">$ amount</th><th class="num">Exp. return</th>' +
+        '</tr></thead><tbody>' +
+        moves.map(function(t) {
+          var isNew = t.current_pct === 0 && t.target_pct > 0;
+          return '<tr' + (isNew ? ' style="background:rgba(95,163,106,.08)"' : '') + '>' +
+            '<td><b>' + esc(t.ticker) + '</b>' + (isNew ? ' <span class="pill pill-add" style="font-size:0.7em">NEW</span>' : '') + '</td>' +
+            '<td><span class="pill pill-' + t.action.toLowerCase() + '">' + t.action + '</span></td>' +
+            '<td class="num">' + t.current_pct.toFixed(1) + '%</td>' +
+            '<td class="num">' + t.target_pct.toFixed(1) + '%</td>' +
+            '<td class="num ' + (t.change_pct >= 0 ? 'up' : 'down') + '">' + (t.change_pct >= 0 ? '+' : '') + t.change_pct.toFixed(1) + ' pts</td>' +
+            '<td class="num">' + (t.dollars != null ? signUsd(t.dollars) : '—') + '</td>' +
+            '<td class="num">' + pct(t.exp_return_pct) + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div></div>' +
+    '</div>';
+}
+
 
 // ── Chapter 9: every position ────────────────────────────────────
 function chTable(d) {
@@ -618,7 +785,7 @@ function showView(id) {
 window.showView = showView;
 
 function reset() {
-  files = []; holdings = []; manualItems = []; notes = [];
+  files = []; holdings = []; manualItems = []; notes = []; candidateTickers = [];
   Object.keys(charts).forEach(destroy);
   renderFileChips();
   $('sheet-url').value = '';

@@ -206,3 +206,9 @@ input:focus { border-color: var(--leaf); box-shadow: 0 0 0 3px rgba(95, 163, 106
 @media (prefers-reduced-motion: reduce) {
   .explain, .visual { transition: none; opacity: 1; transform: none; }
 }
+
+/* ── candidate stocks ────────────────────────────────── */
+.candidate-panel { border: 2px dashed var(--line); background: var(--bg2); }
+.candidate-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.candidate-row input { width: 120px; text-transform: uppercase; font-weight: 700; letter-spacing: .04em; }
+.candidate-chip { border: 2px solid var(--leaf) !important; }

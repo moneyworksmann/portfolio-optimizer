@@ -151,6 +151,69 @@ def _hindsight(lots, md):
         return {'available': False, 'reason': f'Could not build the since-you-bought view: {e}'}
 
 
+# ── re-optimize with candidate stocks ───────────────────────────────────────
+
+@app.route('/api/reoptimize', methods=['POST'])
+def reoptimize():
+    """Re-run the optimizer with candidate tickers added to the universe,
+    and compute PRISM for both the current and suggested portfolios."""
+    started = time.time()
+    reset_counters()
+
+    body = request.get_json(force=True, silent=True) or {}
+    lots = ingest.clean_lots(body.get('holdings', []))
+    shares, purchase_prices = ingest.normalise(lots)
+    candidates = list(dict.fromkeys(
+        t.upper().strip() for t in body.get('candidates', [])
+        if t.strip() and t.upper().strip() not in shares
+    ))
+
+    if not shares:
+        return jsonify({'error': 'No holdings provided'}), 400
+    if not candidates:
+        return jsonify({'error': 'No candidate tickers provided'}), 400
+
+    all_tickers = list(shares) + candidates
+    md = MarketData(all_tickers, period='5y')
+
+    if not md.valid:
+        return jsonify({'error': 'Could not fetch price data.'}), 400
+
+    valid_candidates = [c for c in candidates if c in md.valid]
+    invalid_candidates = [c for c in candidates if c not in md.valid]
+
+    prices, purchase = portfolio.resolve_prices(md, shares, purchase_prices)
+    book = portfolio.calculate(shares, prices, purchase)
+    weights = portfolio.weights_from(book)
+
+    for c in valid_candidates:
+        weights[c] = 0.0
+
+    optimization = optimizer.analyse(md, weights, book['total_value'])
+
+    current_weights = portfolio.weights_from(book)
+    prism_current = prism.compute(md, current_weights)
+
+    prism_suggested = None
+    if optimization.get('available') and optimization.get('strategies', {}).get('optimal'):
+        opt_pcts = optimization['strategies']['optimal']['weights']
+        opt_weights = {t: v / 100.0 for t, v in opt_pcts.items()}
+        prism_suggested = prism.compute(md, opt_weights)
+
+    payload = {
+        'optimization': optimization,
+        'prism_current': prism_current,
+        'prism_suggested': prism_suggested,
+        'candidates': valid_candidates,
+        'invalid_candidates': invalid_candidates,
+        'meta': {
+            'elapsed_ms': int((time.time() - started) * 1000),
+            'fetches': counters(),
+        },
+    }
+    return jsonify(payload)
+
+
 # ── entry ────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
