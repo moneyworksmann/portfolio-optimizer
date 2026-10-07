@@ -716,15 +716,40 @@ function downloadReport() {
   if (!o || !o.available) return;
   var im = o.impact;
   var today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-
   var up = s.total_gain >= 0;
+
+  var impactHtml = '<div class="section"><h2>Current vs Suggested Performance</h2>' +
+    '<p class="hint">What the optimizer projects if you rebalance to the suggested mix</p>' +
+    '<div class="kpis">' +
+      '<div class="kpi-box"><div class="label">Expected Return</div><div class="val">' + pct(im.return_now_pct) + '</div><div class="sub">current</div></div>' +
+      '<div class="kpi-box"><div class="label">Suggested Return</div><div class="val up">' + pct(im.return_after_pct) + '</div><div class="sub">after changes</div></div>' +
+      '<div class="kpi-box"><div class="label">Risk (Yearly Swing)</div><div class="val">' + plainPct(im.risk_now_pct) + '</div><div class="sub">current</div></div>' +
+      '<div class="kpi-box"><div class="label">Suggested Risk</div><div class="val">' + plainPct(im.risk_after_pct) + '</div><div class="sub">after changes</div></div>' +
+      '<div class="kpi-box"><div class="label">Sharpe Ratio</div><div class="val">' + im.sharpe_now.toFixed(2) + '</div><div class="sub">current</div></div>' +
+      '<div class="kpi-box"><div class="label">Suggested Sharpe</div><div class="val up">' + im.sharpe_after.toFixed(2) + '</div><div class="sub">after changes</div></div>' +
+    '</div>' +
+    '<table><thead><tr><th>Metric</th><th class="num">Current</th><th class="num">After Changes</th><th class="num">Change</th></tr></thead><tbody>' +
+    '<tr><td><b>Expected Return</b></td><td class="num">' + pct(im.return_now_pct) + '</td><td class="num">' + pct(im.return_after_pct) + '</td>' +
+      '<td class="num ' + (im.return_after_pct >= im.return_now_pct ? 'up' : 'dn') + '">' + (im.return_after_pct - im.return_now_pct >= 0 ? '+' : '') + (im.return_after_pct - im.return_now_pct).toFixed(1) + ' pts</td></tr>' +
+    '<tr><td><b>Yearly Swing (Risk)</b></td><td class="num">' + plainPct(im.risk_now_pct) + '</td><td class="num">' + plainPct(im.risk_after_pct) + '</td>' +
+      '<td class="num ' + (im.risk_after_pct <= im.risk_now_pct ? 'up' : 'dn') + '">' + (im.risk_after_pct - im.risk_now_pct >= 0 ? '+' : '') + (im.risk_after_pct - im.risk_now_pct).toFixed(1) + ' pts</td></tr>' +
+    '<tr><td><b>Sharpe Ratio</b></td><td class="num">' + im.sharpe_now.toFixed(2) + '</td><td class="num">' + im.sharpe_after.toFixed(2) + '</td>' +
+      '<td class="num ' + (im.sharpe_after >= im.sharpe_now ? 'up' : 'dn') + '">' + (im.sharpe_after - im.sharpe_now >= 0 ? '+' : '') + (im.sharpe_after - im.sharpe_now).toFixed(2) + '</td></tr>';
+  if (im.dollars_per_year_now != null && im.dollars_per_year_after != null) {
+    var dollarDelta = im.dollars_per_year_after - im.dollars_per_year_now;
+    impactHtml += '<tr><td><b>Est. Annual Income</b></td><td class="num">' + usd(im.dollars_per_year_now) + '</td><td class="num">' + usd(im.dollars_per_year_after) + '</td>' +
+      '<td class="num ' + (dollarDelta >= 0 ? 'up' : 'dn') + '">' + signUsd(dollarDelta) + '</td></tr>';
+  }
+  impactHtml += '<tr><td><b>Turnover</b></td><td class="num" colspan="2">' + im.turnover_pct.toFixed(0) + '% of portfolio across ' + o.trades.filter(function(t) { return t.action !== 'Keep'; }).length + ' trades</td><td></td></tr>' +
+    '</tbody></table></div>';
+
   var prismHtml = '';
   if (pr && pr.available) {
     var dims = [['F', 'Diversification'], ['I', 'Independence'], ['N', 'Calm'], ['E', 'Balance']];
     prismHtml = '<div class="section"><h2>PRISM Risk Health Score</h2>' +
       '<div class="score-big">' + pr.prism_score.toFixed(0) + '<span class="score-label"> / 100</span></div>' +
       '<p class="score-band">' + (pr.prism_score >= 70 ? 'Healthy' : pr.prism_score >= 40 ? 'Growing, with a few weak spots' : 'Fragile') + '</p>' +
-      '<table><thead><tr><th>Dimension</th><th>Score</th><th>Bar</th></tr></thead><tbody>' +
+      '<table><thead><tr><th>Dimension</th><th class="num">Score</th><th>Bar</th></tr></thead><tbody>' +
       dims.map(function(dd) {
         var v = pr.sub_scores[dd[0]];
         var color = v >= 70 ? '#5fa36a' : v >= 40 ? '#e9b949' : '#c97b5a';
@@ -734,29 +759,24 @@ function downloadReport() {
       '</tbody></table></div>';
   }
 
-  var afterPrismHtml = '';
-  if (pr && pr.available && o.strategies && o.strategies.optimal) {
-    var optWeights = o.strategies.optimal.weights;
-    afterPrismHtml = '<div class="section"><h2>Projected PRISM After Changes</h2>' +
-      '<p class="hint">Based on the suggested optimal weights applied to 5-year price history</p>' +
-      '<table><thead><tr><th>Metric</th><th>Current</th><th>After Changes</th><th>Change</th></tr></thead><tbody>' +
-      '<tr><td><b>Expected Return</b></td><td>' + pct(im.return_now_pct) + '</td><td>' + pct(im.return_after_pct) + '</td>' +
-        '<td class="' + (im.return_after_pct >= im.return_now_pct ? 'up' : 'dn') + '">' + (im.return_after_pct - im.return_now_pct >= 0 ? '+' : '') + (im.return_after_pct - im.return_now_pct).toFixed(1) + ' pts</td></tr>' +
-      '<tr><td><b>Yearly Swing (Risk)</b></td><td>' + plainPct(im.risk_now_pct) + '</td><td>' + plainPct(im.risk_after_pct) + '</td>' +
-        '<td class="' + (im.risk_after_pct <= im.risk_now_pct ? 'up' : 'dn') + '">' + (im.risk_after_pct - im.risk_now_pct >= 0 ? '+' : '') + (im.risk_after_pct - im.risk_now_pct).toFixed(1) + ' pts</td></tr>' +
-      '<tr><td><b>Sharpe Ratio</b></td><td>' + im.sharpe_now.toFixed(2) + '</td><td>' + im.sharpe_after.toFixed(2) + '</td>' +
-        '<td class="' + (im.sharpe_after >= im.sharpe_now ? 'up' : 'dn') + '">' + (im.sharpe_after - im.sharpe_now >= 0 ? '+' : '') + (im.sharpe_after - im.sharpe_now).toFixed(2) + '</td></tr>';
-    if (im.dollars_per_year_now != null && im.dollars_per_year_after != null) {
-      var dollarDelta = im.dollars_per_year_after - im.dollars_per_year_now;
-      afterPrismHtml += '<tr><td><b>Est. Annual Income</b></td><td>' + usd(im.dollars_per_year_now) + '</td><td>' + usd(im.dollars_per_year_after) + '</td>' +
-        '<td class="' + (dollarDelta >= 0 ? 'up' : 'dn') + '">' + signUsd(dollarDelta) + '</td></tr>';
-    }
-    afterPrismHtml += '</tbody></table></div>';
-  }
+  var allocHtml = '<div class="section"><h2>Current vs Suggested Allocation</h2>' +
+    '<p class="hint">Side-by-side weight comparison — how each holding changes</p>' +
+    '<table><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Current Weight</th><th class="num">Suggested Weight</th><th class="num">Change</th><th>Action</th></tr></thead><tbody>' +
+    o.trades.slice().sort(function(a, b) { return b.target_pct - a.target_pct; }).map(function(t) {
+      var sector = '';
+      var match = d.holdings.filter(function(h) { return h.ticker === t.ticker; });
+      if (match.length) sector = match[0].sector || '';
+      return '<tr><td><b>' + esc(t.ticker) + '</b></td><td>' + esc(sector) + '</td>' +
+        '<td class="num">' + t.current_pct.toFixed(1) + '%</td>' +
+        '<td class="num">' + t.target_pct.toFixed(1) + '%</td>' +
+        '<td class="num ' + (t.change_pct >= 0 ? 'up' : 'dn') + '">' + (t.change_pct >= 0 ? '+' : '') + t.change_pct.toFixed(1) + ' pts</td>' +
+        '<td><span class="pill pill-' + t.action.toLowerCase() + '">' + t.action + '</span></td></tr>';
+    }).join('') +
+    '</tbody></table></div>';
 
   var tradesHtml = '<div class="section"><h2>Suggested Trades</h2>' +
-    '<p class="hint">No single holding above ' + o.max_position_pct + '% — turnover ' + im.turnover_pct.toFixed(0) + '% of portfolio</p>' +
-    '<table><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th class="num">$ Amount</th><th class="num">Exp. Return</th></tr></thead><tbody>' +
+    '<p class="hint">Dollar and share amounts use today&#39;s value and prices</p>' +
+    '<table><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th class="num">$ Amount</th><th class="num">Shares</th><th class="num">Exp. Return</th></tr></thead><tbody>' +
     o.trades.map(function(t) {
       return '<tr><td><b>' + esc(t.ticker) + '</b></td>' +
         '<td><span class="pill pill-' + t.action.toLowerCase() + '">' + t.action + '</span></td>' +
@@ -764,6 +784,7 @@ function downloadReport() {
         '<td class="num">' + t.target_pct.toFixed(1) + '%</td>' +
         '<td class="num ' + (t.change_pct >= 0 ? 'up' : 'dn') + '">' + (t.change_pct >= 0 ? '+' : '') + t.change_pct.toFixed(1) + ' pts</td>' +
         '<td class="num">' + (t.dollars != null ? signUsd(t.dollars) : '') + '</td>' +
+        '<td class="num">' + (t.shares != null ? (t.shares >= 0 ? '+' : '') + t.shares.toFixed(3) : '') + '</td>' +
         '<td class="num">' + pct(t.exp_return_pct) + '</td></tr>';
     }).join('') +
     '</tbody></table></div>';
@@ -786,7 +807,7 @@ function downloadReport() {
     '.header .date { color: #7d9087; font-size: 13px; }' +
     '.section { margin-bottom: 32px; }' +
     '.section h2 { font-size: 18px; color: #2f6b4f; border-bottom: 1px solid #dfe7d6; padding-bottom: 6px; margin-bottom: 14px; }' +
-    '.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }' +
+    '.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 20px; }' +
     '.kpi-box { background: #f5f7ef; border: 1px solid #dfe7d6; border-radius: 10px; padding: 14px 16px; }' +
     '.kpi-box .label { font-size: 11px; font-weight: 700; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; }' +
     '.kpi-box .val { font-size: 22px; font-weight: 800; margin-top: 2px; }' +
@@ -821,7 +842,8 @@ function downloadReport() {
 
     holdingsHtml +
     prismHtml +
-    afterPrismHtml +
+    impactHtml +
+    allocHtml +
     tradesHtml +
 
     '<div class="footer">Generated by Portfolio Intelligence. Built from historical data — not financial advice.</div>' +
