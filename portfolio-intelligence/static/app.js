@@ -523,6 +523,10 @@ function chSuggest(d) {
         ${o.trades.map((t) => `<tr><td><b>${esc(t.ticker)}</b></td><td><span class="pill pill-${t.action.toLowerCase()}">${t.action}</span></td><td class="num">${t.current_pct.toFixed(1)}%</td><td class="num">${t.target_pct.toFixed(1)}%</td><td class="num ${t.change_pct >= 0 ? 'up' : 'down'}">${t.change_pct >= 0 ? '+' : ''}${t.change_pct.toFixed(1)} pts</td><td class="num">${t.dollars != null ? signUsd(t.dollars) : '—'}</td><td class="num">${t.shares != null ? (t.shares >= 0 ? '+' : '') + t.shares.toFixed(3) : '—'}</td><td class="num">${pct(t.exp_return_pct)}</td></tr>`).join('')}
         </tbody></table></div></div>
 
+      <div style="margin-top:16px;text-align:right">
+        <button class="btn btn-primary" onclick="downloadReport()">&#8681; Download report</button>
+      </div>
+
       <div class="panel candidate-panel" style="margin-top:24px">
         <h3>Considering new stocks?</h3>
         <p class="hint">Add tickers you are thinking about buying. We will re-run the optimizer with them in the mix and show how they would change your allocation and PRISM score.</p>
@@ -701,6 +705,137 @@ function renderReoptResults(data) {
         }).join('') +
         '</tbody></table></div></div>' +
     '</div>';
+}
+
+function downloadReport() {
+  var d = window._data;
+  if (!d) return;
+  var s = d.summary;
+  var pr = d.prism;
+  var o = d.optimization;
+  if (!o || !o.available) return;
+  var im = o.impact;
+  var today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  var up = s.total_gain >= 0;
+  var prismHtml = '';
+  if (pr && pr.available) {
+    var dims = [['F', 'Diversification'], ['I', 'Independence'], ['N', 'Calm'], ['E', 'Balance']];
+    prismHtml = '<div class="section"><h2>PRISM Risk Health Score</h2>' +
+      '<div class="score-big">' + pr.prism_score.toFixed(0) + '<span class="score-label"> / 100</span></div>' +
+      '<p class="score-band">' + (pr.prism_score >= 70 ? 'Healthy' : pr.prism_score >= 40 ? 'Growing, with a few weak spots' : 'Fragile') + '</p>' +
+      '<table><thead><tr><th>Dimension</th><th>Score</th><th>Bar</th></tr></thead><tbody>' +
+      dims.map(function(dd) {
+        var v = pr.sub_scores[dd[0]];
+        var color = v >= 70 ? '#5fa36a' : v >= 40 ? '#e9b949' : '#c97b5a';
+        return '<tr><td>' + dd[1] + '</td><td class="num">' + v.toFixed(0) + '</td>' +
+          '<td><div class="bar-bg"><div class="bar-fg" style="width:' + v + '%;background:' + color + '"></div></div></td></tr>';
+      }).join('') +
+      '</tbody></table></div>';
+  }
+
+  var afterPrismHtml = '';
+  if (pr && pr.available && o.strategies && o.strategies.optimal) {
+    var optWeights = o.strategies.optimal.weights;
+    afterPrismHtml = '<div class="section"><h2>Projected PRISM After Changes</h2>' +
+      '<p class="hint">Based on the suggested optimal weights applied to 5-year price history</p>' +
+      '<table><thead><tr><th>Metric</th><th>Current</th><th>After Changes</th><th>Change</th></tr></thead><tbody>' +
+      '<tr><td><b>Expected Return</b></td><td>' + pct(im.return_now_pct) + '</td><td>' + pct(im.return_after_pct) + '</td>' +
+        '<td class="' + (im.return_after_pct >= im.return_now_pct ? 'up' : 'dn') + '">' + (im.return_after_pct - im.return_now_pct >= 0 ? '+' : '') + (im.return_after_pct - im.return_now_pct).toFixed(1) + ' pts</td></tr>' +
+      '<tr><td><b>Yearly Swing (Risk)</b></td><td>' + plainPct(im.risk_now_pct) + '</td><td>' + plainPct(im.risk_after_pct) + '</td>' +
+        '<td class="' + (im.risk_after_pct <= im.risk_now_pct ? 'up' : 'dn') + '">' + (im.risk_after_pct - im.risk_now_pct >= 0 ? '+' : '') + (im.risk_after_pct - im.risk_now_pct).toFixed(1) + ' pts</td></tr>' +
+      '<tr><td><b>Sharpe Ratio</b></td><td>' + im.sharpe_now.toFixed(2) + '</td><td>' + im.sharpe_after.toFixed(2) + '</td>' +
+        '<td class="' + (im.sharpe_after >= im.sharpe_now ? 'up' : 'dn') + '">' + (im.sharpe_after - im.sharpe_now >= 0 ? '+' : '') + (im.sharpe_after - im.sharpe_now).toFixed(2) + '</td></tr>';
+    if (im.dollars_per_year_now != null && im.dollars_per_year_after != null) {
+      var dollarDelta = im.dollars_per_year_after - im.dollars_per_year_now;
+      afterPrismHtml += '<tr><td><b>Est. Annual Income</b></td><td>' + usd(im.dollars_per_year_now) + '</td><td>' + usd(im.dollars_per_year_after) + '</td>' +
+        '<td class="' + (dollarDelta >= 0 ? 'up' : 'dn') + '">' + signUsd(dollarDelta) + '</td></tr>';
+    }
+    afterPrismHtml += '</tbody></table></div>';
+  }
+
+  var tradesHtml = '<div class="section"><h2>Suggested Trades</h2>' +
+    '<p class="hint">No single holding above ' + o.max_position_pct + '% — turnover ' + im.turnover_pct.toFixed(0) + '% of portfolio</p>' +
+    '<table><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th class="num">$ Amount</th><th class="num">Exp. Return</th></tr></thead><tbody>' +
+    o.trades.map(function(t) {
+      return '<tr><td><b>' + esc(t.ticker) + '</b></td>' +
+        '<td><span class="pill pill-' + t.action.toLowerCase() + '">' + t.action + '</span></td>' +
+        '<td class="num">' + t.current_pct.toFixed(1) + '%</td>' +
+        '<td class="num">' + t.target_pct.toFixed(1) + '%</td>' +
+        '<td class="num ' + (t.change_pct >= 0 ? 'up' : 'dn') + '">' + (t.change_pct >= 0 ? '+' : '') + t.change_pct.toFixed(1) + ' pts</td>' +
+        '<td class="num">' + (t.dollars != null ? signUsd(t.dollars) : '') + '</td>' +
+        '<td class="num">' + pct(t.exp_return_pct) + '</td></tr>';
+    }).join('') +
+    '</tbody></table></div>';
+
+  var holdingsHtml = '<div class="section"><h2>Current Holdings</h2>' +
+    '<table><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Gain</th></tr></thead><tbody>' +
+    d.holdings.map(function(h) {
+      return '<tr><td><b>' + esc(h.ticker) + '</b></td><td>' + esc(h.sector || '') + '</td>' +
+        '<td class="num">' + usd(h.value) + '</td><td class="num">' + h.weight.toFixed(1) + '%</td>' +
+        '<td class="num ' + (h.gain >= 0 ? 'up' : 'dn') + '">' + pct(h.gain_pct) + '</td></tr>';
+    }).join('') +
+    '</tbody></table></div>';
+
+  var html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Portfolio Intelligence Report</title><style>' +
+    '*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }' +
+    'body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1f3a2e; background: #fff; padding: 40px; max-width: 900px; margin: 0 auto; font-size: 14px; line-height: 1.5; }' +
+    '.header { text-align: center; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 2px solid #dfe7d6; }' +
+    '.header h1 { font-size: 26px; color: #2f6b4f; margin-bottom: 4px; }' +
+    '.header .date { color: #7d9087; font-size: 13px; }' +
+    '.section { margin-bottom: 32px; }' +
+    '.section h2 { font-size: 18px; color: #2f6b4f; border-bottom: 1px solid #dfe7d6; padding-bottom: 6px; margin-bottom: 14px; }' +
+    '.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }' +
+    '.kpi-box { background: #f5f7ef; border: 1px solid #dfe7d6; border-radius: 10px; padding: 14px 16px; }' +
+    '.kpi-box .label { font-size: 11px; font-weight: 700; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; }' +
+    '.kpi-box .val { font-size: 22px; font-weight: 800; margin-top: 2px; }' +
+    '.kpi-box .sub { font-size: 12px; color: #4d6558; }' +
+    'table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }' +
+    'th { text-align: left; font-size: 11px; font-weight: 700; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; padding: 8px 10px; border-bottom: 2px solid #dfe7d6; }' +
+    'td { padding: 6px 10px; border-bottom: 1px solid #eef3e6; }' +
+    '.num { text-align: right; font-variant-numeric: tabular-nums; }' +
+    '.up { color: #2f6b4f; }' +
+    '.dn { color: #c97b5a; }' +
+    '.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }' +
+    '.pill-add { background: #d6ecd9; color: #2f6b4f; }' +
+    '.pill-trim { background: #efe4cc; color: #8a6a1f; }' +
+    '.pill-exit { background: #f6e3da; color: #c97b5a; }' +
+    '.pill-keep { background: #eef3e6; color: #4d6558; }' +
+    '.score-big { font-size: 48px; font-weight: 800; color: #2f6b4f; text-align: center; margin: 12px 0 4px; }' +
+    '.score-label { font-size: 20px; font-weight: 400; color: #7d9087; }' +
+    '.score-band { text-align: center; color: #4d6558; margin-bottom: 16px; }' +
+    '.bar-bg { height: 8px; background: #eef3e6; border-radius: 99px; overflow: hidden; }' +
+    '.bar-fg { height: 100%; border-radius: 99px; }' +
+    '.hint { color: #7d9087; font-size: 12px; margin-bottom: 10px; }' +
+    '.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #dfe7d6; text-align: center; font-size: 11px; color: #7d9087; }' +
+    '@media print { body { padding: 20px; } .section { break-inside: avoid; } }' +
+    '</style></head><body>' +
+    '<div class="header"><h1>Portfolio Intelligence Report</h1><p class="date">' + today + '</p></div>' +
+
+    '<div class="section"><h2>Portfolio Snapshot</h2><div class="kpis">' +
+      '<div class="kpi-box"><div class="label">Total Value</div><div class="val">' + usd(s.total_value) + '</div><div class="sub">' + s.positions + ' holdings</div></div>' +
+      '<div class="kpi-box"><div class="label">Total Invested</div><div class="val">' + usd(s.total_cost) + '</div></div>' +
+      '<div class="kpi-box"><div class="label">Total Gain</div><div class="val ' + (up ? 'up' : 'dn') + '">' + signUsd(s.total_gain) + '</div><div class="sub">' + pct(s.total_gain_pct) + '</div></div>' +
+    '</div></div>' +
+
+    holdingsHtml +
+    prismHtml +
+    afterPrismHtml +
+    tradesHtml +
+
+    '<div class="footer">Generated by Portfolio Intelligence. Built from historical data — not financial advice.</div>' +
+    '</body></html>';
+
+  var blob = new Blob([html], { type: 'text/html' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'portfolio-report-' + new Date().toISOString().slice(0, 10) + '.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 
