@@ -753,56 +753,124 @@ function downloadReport() {
   if (!d) return;
   var s = d.summary;
   var pr = d.prism;
+  var ps = d.prism_suggested;
   var o = d.optimization;
   if (!o || !o.available) return;
   var im = o.impact;
   var today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   var up = s.total_gain >= 0;
+  var dims = [['F', 'Diversification'], ['I', 'Independence'], ['N', 'Calm'], ['E', 'Balance']];
+  var tone = function(v) { return v >= 70 ? '#5fa36a' : v >= 40 ? '#e9b949' : '#c97b5a'; };
+  var band = function(v) { return v >= 70 ? 'Healthy' : v >= 40 ? 'Growing' : 'Fragile'; };
 
-  var impactHtml = '<div class="section"><h2>Current vs Suggested Performance</h2>' +
-    '<p class="hint">What the optimizer projects if you rebalance to the suggested mix</p>' +
-    '<div class="kpis">' +
-      '<div class="kpi-box"><div class="label">Expected Return</div><div class="val">' + pct(im.return_now_pct) + '</div><div class="sub">current</div></div>' +
-      '<div class="kpi-box"><div class="label">Suggested Return</div><div class="val up">' + pct(im.return_after_pct) + '</div><div class="sub">after changes</div></div>' +
-      '<div class="kpi-box"><div class="label">Risk (Yearly Swing)</div><div class="val">' + plainPct(im.risk_now_pct) + '</div><div class="sub">current</div></div>' +
-      '<div class="kpi-box"><div class="label">Suggested Risk</div><div class="val">' + plainPct(im.risk_after_pct) + '</div><div class="sub">after changes</div></div>' +
-      '<div class="kpi-box"><div class="label">Sharpe Ratio</div><div class="val">' + im.sharpe_now.toFixed(2) + '</div><div class="sub">current</div></div>' +
-      '<div class="kpi-box"><div class="label">Suggested Sharpe</div><div class="val up">' + im.sharpe_after.toFixed(2) + '</div><div class="sub">after changes</div></div>' +
-    '</div>' +
-    '<table><thead><tr><th>Metric</th><th class="num">Current</th><th class="num">After Changes</th><th class="num">Change</th></tr></thead><tbody>' +
-    '<tr><td><b>Expected Return</b></td><td class="num">' + pct(im.return_now_pct) + '</td><td class="num">' + pct(im.return_after_pct) + '</td>' +
-      '<td class="num ' + (im.return_after_pct >= im.return_now_pct ? 'up' : 'dn') + '">' + (im.return_after_pct - im.return_now_pct >= 0 ? '+' : '') + (im.return_after_pct - im.return_now_pct).toFixed(1) + ' pts</td></tr>' +
-    '<tr><td><b>Yearly Swing (Risk)</b></td><td class="num">' + plainPct(im.risk_now_pct) + '</td><td class="num">' + plainPct(im.risk_after_pct) + '</td>' +
-      '<td class="num ' + (im.risk_after_pct <= im.risk_now_pct ? 'up' : 'dn') + '">' + (im.risk_after_pct - im.risk_now_pct >= 0 ? '+' : '') + (im.risk_after_pct - im.risk_now_pct).toFixed(1) + ' pts</td></tr>' +
-    '<tr><td><b>Sharpe Ratio</b></td><td class="num">' + im.sharpe_now.toFixed(2) + '</td><td class="num">' + im.sharpe_after.toFixed(2) + '</td>' +
-      '<td class="num ' + (im.sharpe_after >= im.sharpe_now ? 'up' : 'dn') + '">' + (im.sharpe_after - im.sharpe_now >= 0 ? '+' : '') + (im.sharpe_after - im.sharpe_now).toFixed(2) + '</td></tr>';
-  if (im.dollars_per_year_now != null && im.dollars_per_year_after != null) {
-    var dollarDelta = im.dollars_per_year_after - im.dollars_per_year_now;
-    impactHtml += '<tr><td><b>Est. Annual Income</b></td><td class="num">' + usd(im.dollars_per_year_now) + '</td><td class="num">' + usd(im.dollars_per_year_after) + '</td>' +
-      '<td class="num ' + (dollarDelta >= 0 ? 'up' : 'dn') + '">' + signUsd(dollarDelta) + '</td></tr>';
-  }
-  impactHtml += '<tr><td><b>Turnover</b></td><td class="num" colspan="2">' + im.turnover_pct.toFixed(0) + '% of portfolio across ' + o.trades.filter(function(t) { return t.action !== 'Keep'; }).length + ' trades</td><td></td></tr>' +
+  var rptCss = '*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }' +
+    'body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1f3a2e; background: #fff; padding: 40px; max-width: 960px; margin: 0 auto; font-size: 14px; line-height: 1.5; }' +
+    '.header { text-align: center; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 2px solid #dfe7d6; }' +
+    '.header h1 { font-size: 26px; color: #2f6b4f; margin-bottom: 4px; }' +
+    '.header .date { color: #7d9087; font-size: 13px; }' +
+    '.part { margin-bottom: 40px; }' +
+    '.part-title { font-size: 20px; font-weight: 800; color: #fff; background: #2f6b4f; padding: 10px 18px; border-radius: 10px; margin-bottom: 20px; }' +
+    '.part-title.after { background: #6aa6c8; }' +
+    '.section { margin-bottom: 28px; }' +
+    '.section h3 { font-size: 16px; color: #2f6b4f; border-bottom: 1px solid #dfe7d6; padding-bottom: 6px; margin-bottom: 12px; }' +
+    '.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }' +
+    '.kpi-box { background: #f5f7ef; border: 1px solid #dfe7d6; border-radius: 10px; padding: 14px 16px; }' +
+    '.kpi-box .label { font-size: 11px; font-weight: 700; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; }' +
+    '.kpi-box .val { font-size: 22px; font-weight: 800; margin-top: 2px; }' +
+    '.kpi-box .sub { font-size: 12px; color: #4d6558; }' +
+    'table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }' +
+    'th { text-align: left; font-size: 11px; font-weight: 700; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; padding: 8px 10px; border-bottom: 2px solid #dfe7d6; }' +
+    'td { padding: 6px 10px; border-bottom: 1px solid #eef3e6; }' +
+    '.num { text-align: right; font-variant-numeric: tabular-nums; }' +
+    '.up { color: #2f6b4f; } .dn { color: #c97b5a; }' +
+    '.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }' +
+    '.pill-add { background: #d6ecd9; color: #2f6b4f; } .pill-trim { background: #efe4cc; color: #8a6a1f; } .pill-exit { background: #f6e3da; color: #c97b5a; } .pill-keep { background: #eef3e6; color: #4d6558; }' +
+    '.score-row { display: flex; align-items: center; gap: 14px; margin: 10px 0 16px; }' +
+    '.score-num { font-size: 44px; font-weight: 800; line-height: 1; }' +
+    '.score-out { font-size: 16px; color: #7d9087; }' +
+    '.bar-bg { height: 8px; background: #eef3e6; border-radius: 99px; overflow: hidden; }' +
+    '.bar-fg { height: 100%; border-radius: 99px; }' +
+    '.hint { color: #7d9087; font-size: 12px; margin-bottom: 10px; }' +
+    '.divider { border: none; border-top: 3px solid #dfe7d6; margin: 36px 0; }' +
+    '.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }' +
+    '.compare > div { padding: 16px; border-radius: 10px; }' +
+    '.compare .now { background: #f5f7ef; border: 1px solid #dfe7d6; }' +
+    '.compare .after { background: #e8f4f8; border: 1px solid #c3dfe9; }' +
+    '.compare h4 { font-size: 13px; font-weight: 800; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }' +
+    '.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #dfe7d6; text-align: center; font-size: 11px; color: #7d9087; }' +
+    '@media print { body { padding: 20px; } .part, .section { break-inside: avoid; } .compare { grid-template-columns: 1fr 1fr; } }' +
+    '@media (max-width: 600px) { .compare { grid-template-columns: 1fr; } }';
+
+  // ── PART 1: YOUR PORTFOLIO NOW ──
+  var part1 = '<div class="part">' +
+    '<div class="part-title">Part 1: Your Portfolio Now</div>' +
+
+    '<div class="section"><h3>Portfolio Snapshot</h3><div class="kpis">' +
+      '<div class="kpi-box"><div class="label">Total Value</div><div class="val">' + usd(s.total_value) + '</div><div class="sub">' + s.positions + ' holdings</div></div>' +
+      '<div class="kpi-box"><div class="label">Total Invested</div><div class="val">' + usd(s.total_cost) + '</div></div>' +
+      '<div class="kpi-box"><div class="label">Total Gain</div><div class="val ' + (up ? 'up' : 'dn') + '">' + signUsd(s.total_gain) + '</div><div class="sub">' + pct(s.total_gain_pct) + '</div></div>' +
+      '<div class="kpi-box"><div class="label">Expected Return</div><div class="val">' + pct(im.return_now_pct) + '</div></div>' +
+      '<div class="kpi-box"><div class="label">Risk (Swing)</div><div class="val">' + plainPct(im.risk_now_pct) + '</div></div>' +
+      '<div class="kpi-box"><div class="label">Sharpe Ratio</div><div class="val">' + im.sharpe_now.toFixed(2) + '</div></div>' +
+    '</div></div>' +
+
+    '<div class="section"><h3>Current Holdings</h3>' +
+    '<table><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Gain</th></tr></thead><tbody>' +
+    d.holdings.map(function(h) {
+      return '<tr><td><b>' + esc(h.ticker) + '</b></td><td>' + esc(h.sector || '') + '</td>' +
+        '<td class="num">' + usd(h.value) + '</td><td class="num">' + h.weight.toFixed(1) + '%</td>' +
+        '<td class="num ' + (h.gain >= 0 ? 'up' : 'dn') + '">' + pct(h.gain_pct) + '</td></tr>';
+    }).join('') +
     '</tbody></table></div>';
 
-  var prismHtml = '';
   if (pr && pr.available) {
-    var dims = [['F', 'Diversification'], ['I', 'Independence'], ['N', 'Calm'], ['E', 'Balance']];
-    prismHtml = '<div class="section"><h2>PRISM Risk Health Score</h2>' +
-      '<div class="score-big">' + pr.prism_score.toFixed(0) + '<span class="score-label"> / 100</span></div>' +
-      '<p class="score-band">' + (pr.prism_score >= 70 ? 'Healthy' : pr.prism_score >= 40 ? 'Growing, with a few weak spots' : 'Fragile') + '</p>' +
-      '<table><thead><tr><th>Dimension</th><th class="num">Score</th><th>Bar</th></tr></thead><tbody>' +
+    part1 += '<div class="section"><h3>Current PRISM Score</h3>' +
+      '<div class="score-row"><div class="score-num" style="color:' + tone(pr.prism_score) + '">' + pr.prism_score.toFixed(0) + '</div><div><b>PRISM</b> <span class="score-out">/ 100</span><br><span class="hint">' + band(pr.prism_score) + '</span></div></div>' +
+      '<table><thead><tr><th>Dimension</th><th class="num">Score</th><th style="width:50%">Bar</th></tr></thead><tbody>' +
       dims.map(function(dd) {
         var v = pr.sub_scores[dd[0]];
-        var color = v >= 70 ? '#5fa36a' : v >= 40 ? '#e9b949' : '#c97b5a';
         return '<tr><td>' + dd[1] + '</td><td class="num">' + v.toFixed(0) + '</td>' +
-          '<td><div class="bar-bg"><div class="bar-fg" style="width:' + v + '%;background:' + color + '"></div></div></td></tr>';
+          '<td><div class="bar-bg"><div class="bar-fg" style="width:' + v + '%;background:' + tone(v) + '"></div></div></td></tr>';
+      }).join('') +
+      '</tbody></table></div>';
+  }
+  part1 += '</div>';
+
+  // ── PART 2: AFTER SUGGESTED CHANGES ──
+  var part2 = '<div class="part">' +
+    '<div class="part-title after">Part 2: After Suggested Changes</div>';
+
+  // Suggested KPIs
+  part2 += '<div class="section"><h3>Projected Performance</h3><div class="kpis">' +
+    '<div class="kpi-box"><div class="label">Expected Return</div><div class="val up">' + pct(im.return_after_pct) + '</div><div class="sub">from ' + pct(im.return_now_pct) + '</div></div>' +
+    '<div class="kpi-box"><div class="label">Risk (Swing)</div><div class="val">' + plainPct(im.risk_after_pct) + '</div><div class="sub">from ' + plainPct(im.risk_now_pct) + '</div></div>' +
+    '<div class="kpi-box"><div class="label">Sharpe Ratio</div><div class="val up">' + im.sharpe_after.toFixed(2) + '</div><div class="sub">from ' + im.sharpe_now.toFixed(2) + '</div></div>';
+  if (im.dollars_per_year_after != null) {
+    part2 += '<div class="kpi-box"><div class="label">Est. Annual $</div><div class="val">' + usd(im.dollars_per_year_after) + '</div><div class="sub">from ' + usd(im.dollars_per_year_now) + '</div></div>';
+  }
+  part2 += '</div></div>';
+
+  // Suggested PRISM
+  if (ps && ps.available && pr && pr.available) {
+    var delta = ps.prism_score - pr.prism_score;
+    var deltaUp = delta >= 0;
+    part2 += '<div class="section"><h3>Projected PRISM Score</h3>' +
+      '<div class="compare"><div class="now"><h4>Current</h4><div class="score-num" style="color:' + tone(pr.prism_score) + '">' + pr.prism_score.toFixed(0) + '</div></div>' +
+      '<div class="after"><h4>After Changes</h4><div class="score-num" style="color:' + tone(ps.prism_score) + '">' + ps.prism_score.toFixed(0) + '</div>' +
+      '<div class="hint ' + (deltaUp ? 'up' : 'dn') + '" style="font-weight:700;margin-top:4px">' + (deltaUp ? '+' : '') + delta.toFixed(1) + ' points</div></div></div>' +
+      '<table><thead><tr><th>Dimension</th><th class="num">Current</th><th class="num">After</th><th class="num">Change</th></tr></thead><tbody>' +
+      dims.map(function(dd) {
+        var before = pr.sub_scores[dd[0]], after = ps.sub_scores[dd[0]], ch = after - before;
+        return '<tr><td>' + dd[1] + '</td><td class="num">' + before.toFixed(0) + '</td><td class="num">' + after.toFixed(0) + '</td>' +
+          '<td class="num ' + (ch >= 0 ? 'up' : 'dn') + '">' + (ch >= 0 ? '+' : '') + ch.toFixed(1) + '</td></tr>';
       }).join('') +
       '</tbody></table></div>';
   }
 
-  var allocHtml = '<div class="section"><h2>Current vs Suggested Allocation</h2>' +
-    '<p class="hint">Side-by-side weight comparison — how each holding changes</p>' +
-    '<table><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Current Weight</th><th class="num">Suggested Weight</th><th class="num">Change</th><th>Action</th></tr></thead><tbody>' +
+  // Suggested allocation
+  part2 += '<div class="section"><h3>Suggested Holdings &amp; Weights</h3>' +
+    '<p class="hint">How each position changes — sorted by suggested weight</p>' +
+    '<table><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Current</th><th class="num">Suggested</th><th class="num">Change</th><th>Action</th></tr></thead><tbody>' +
     o.trades.slice().sort(function(a, b) { return b.target_pct - a.target_pct; }).map(function(t) {
       var sector = '';
       var match = d.holdings.filter(function(h) { return h.ticker === t.ticker; });
@@ -815,78 +883,27 @@ function downloadReport() {
     }).join('') +
     '</tbody></table></div>';
 
-  var tradesHtml = '<div class="section"><h2>Suggested Trades</h2>' +
-    '<p class="hint">Dollar and share amounts use today&#39;s value and prices</p>' +
-    '<table><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th class="num">$ Amount</th><th class="num">Shares</th><th class="num">Exp. Return</th></tr></thead><tbody>' +
-    o.trades.map(function(t) {
+  // Trades to execute
+  part2 += '<div class="section"><h3>Trades to Execute</h3>' +
+    '<p class="hint">Turnover: ' + im.turnover_pct.toFixed(0) + '% of portfolio. Dollar and share amounts use today&#39;s prices.</p>' +
+    '<table><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Target</th><th class="num">$ Amount</th><th class="num">Shares</th><th class="num">Exp. Return</th></tr></thead><tbody>' +
+    o.trades.filter(function(t) { return t.action !== 'Keep'; }).map(function(t) {
       return '<tr><td><b>' + esc(t.ticker) + '</b></td>' +
         '<td><span class="pill pill-' + t.action.toLowerCase() + '">' + t.action + '</span></td>' +
         '<td class="num">' + t.current_pct.toFixed(1) + '%</td>' +
         '<td class="num">' + t.target_pct.toFixed(1) + '%</td>' +
-        '<td class="num ' + (t.change_pct >= 0 ? 'up' : 'dn') + '">' + (t.change_pct >= 0 ? '+' : '') + t.change_pct.toFixed(1) + ' pts</td>' +
         '<td class="num">' + (t.dollars != null ? signUsd(t.dollars) : '') + '</td>' +
         '<td class="num">' + (t.shares != null ? (t.shares >= 0 ? '+' : '') + t.shares.toFixed(3) : '') + '</td>' +
         '<td class="num">' + pct(t.exp_return_pct) + '</td></tr>';
     }).join('') +
     '</tbody></table></div>';
 
-  var holdingsHtml = '<div class="section"><h2>Current Holdings</h2>' +
-    '<table><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Gain</th></tr></thead><tbody>' +
-    d.holdings.map(function(h) {
-      return '<tr><td><b>' + esc(h.ticker) + '</b></td><td>' + esc(h.sector || '') + '</td>' +
-        '<td class="num">' + usd(h.value) + '</td><td class="num">' + h.weight.toFixed(1) + '%</td>' +
-        '<td class="num ' + (h.gain >= 0 ? 'up' : 'dn') + '">' + pct(h.gain_pct) + '</td></tr>';
-    }).join('') +
-    '</tbody></table></div>';
+  part2 += '</div>';
 
   var html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<title>Portfolio Intelligence Report</title><style>' +
-    '*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }' +
-    'body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1f3a2e; background: #fff; padding: 40px; max-width: 900px; margin: 0 auto; font-size: 14px; line-height: 1.5; }' +
-    '.header { text-align: center; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 2px solid #dfe7d6; }' +
-    '.header h1 { font-size: 26px; color: #2f6b4f; margin-bottom: 4px; }' +
-    '.header .date { color: #7d9087; font-size: 13px; }' +
-    '.section { margin-bottom: 32px; }' +
-    '.section h2 { font-size: 18px; color: #2f6b4f; border-bottom: 1px solid #dfe7d6; padding-bottom: 6px; margin-bottom: 14px; }' +
-    '.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 20px; }' +
-    '.kpi-box { background: #f5f7ef; border: 1px solid #dfe7d6; border-radius: 10px; padding: 14px 16px; }' +
-    '.kpi-box .label { font-size: 11px; font-weight: 700; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; }' +
-    '.kpi-box .val { font-size: 22px; font-weight: 800; margin-top: 2px; }' +
-    '.kpi-box .sub { font-size: 12px; color: #4d6558; }' +
-    'table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }' +
-    'th { text-align: left; font-size: 11px; font-weight: 700; color: #7d9087; text-transform: uppercase; letter-spacing: .04em; padding: 8px 10px; border-bottom: 2px solid #dfe7d6; }' +
-    'td { padding: 6px 10px; border-bottom: 1px solid #eef3e6; }' +
-    '.num { text-align: right; font-variant-numeric: tabular-nums; }' +
-    '.up { color: #2f6b4f; }' +
-    '.dn { color: #c97b5a; }' +
-    '.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }' +
-    '.pill-add { background: #d6ecd9; color: #2f6b4f; }' +
-    '.pill-trim { background: #efe4cc; color: #8a6a1f; }' +
-    '.pill-exit { background: #f6e3da; color: #c97b5a; }' +
-    '.pill-keep { background: #eef3e6; color: #4d6558; }' +
-    '.score-big { font-size: 48px; font-weight: 800; color: #2f6b4f; text-align: center; margin: 12px 0 4px; }' +
-    '.score-label { font-size: 20px; font-weight: 400; color: #7d9087; }' +
-    '.score-band { text-align: center; color: #4d6558; margin-bottom: 16px; }' +
-    '.bar-bg { height: 8px; background: #eef3e6; border-radius: 99px; overflow: hidden; }' +
-    '.bar-fg { height: 100%; border-radius: 99px; }' +
-    '.hint { color: #7d9087; font-size: 12px; margin-bottom: 10px; }' +
-    '.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #dfe7d6; text-align: center; font-size: 11px; color: #7d9087; }' +
-    '@media print { body { padding: 20px; } .section { break-inside: avoid; } }' +
-    '</style></head><body>' +
+    '<title>Portfolio Intelligence Report</title><style>' + rptCss + '</style></head><body>' +
     '<div class="header"><h1>Portfolio Intelligence Report</h1><p class="date">' + today + '</p></div>' +
-
-    '<div class="section"><h2>Portfolio Snapshot</h2><div class="kpis">' +
-      '<div class="kpi-box"><div class="label">Total Value</div><div class="val">' + usd(s.total_value) + '</div><div class="sub">' + s.positions + ' holdings</div></div>' +
-      '<div class="kpi-box"><div class="label">Total Invested</div><div class="val">' + usd(s.total_cost) + '</div></div>' +
-      '<div class="kpi-box"><div class="label">Total Gain</div><div class="val ' + (up ? 'up' : 'dn') + '">' + signUsd(s.total_gain) + '</div><div class="sub">' + pct(s.total_gain_pct) + '</div></div>' +
-    '</div></div>' +
-
-    holdingsHtml +
-    prismHtml +
-    impactHtml +
-    allocHtml +
-    tradesHtml +
-
+    part1 + '<hr class="divider">' + part2 +
     '<div class="footer">Generated by Portfolio Intelligence. Built from historical data — not financial advice.</div>' +
     '</body></html>';
 

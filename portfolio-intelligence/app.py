@@ -131,8 +131,9 @@ def analyze():
             k: round(v, 2) for k, v in portfolio.sector_allocation(book, md.sectors).items()
         },
         'performance': portfolio.performance_vs_benchmark(md, shares, purchase),
-        'optimization': optimizer.analyse(md, weights, book['total_value']),
+        'optimization': (opt := optimizer.analyse(md, weights, book['total_value'])),
         'prism': prism.compute(md, weights),
+        'prism_suggested': _prism_for_optimal(md, opt),
         'hindsight': _hindsight(lots, md),
         'meta': {
             'dropped_tickers': md.dropped,
@@ -149,6 +150,18 @@ def _hindsight(lots, md):
         return hindsight.analyse([l for l in lots if l['ticker'] in md.valid], md.sectors)
     except Exception as e:  # never let the history view sink the whole analysis
         return {'available': False, 'reason': f'Could not build the since-you-bought view: {e}'}
+
+
+def _prism_for_optimal(md, opt):
+    """Compute PRISM on the optimizer's suggested weights."""
+    try:
+        if not opt.get('available') or not opt.get('strategies', {}).get('optimal'):
+            return None
+        pcts = opt['strategies']['optimal']['weights']
+        w = {t: v / 100.0 for t, v in pcts.items()}
+        return prism.compute(md, w)
+    except Exception:
+        return None
 
 
 # ── re-optimize with candidate stocks ───────────────────────────────────────
