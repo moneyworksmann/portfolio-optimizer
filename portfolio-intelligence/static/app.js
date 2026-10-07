@@ -529,12 +529,16 @@ function chSuggest(d) {
 
       <div class="panel candidate-panel" style="margin-top:24px">
         <h3>Considering new stocks?</h3>
-        <p class="hint">Add tickers you are thinking about buying. We will re-run the optimizer with them in the mix and show how they would change your allocation and PRISM score.</p>
+        <p class="hint">Add tickers you are thinking about buying — type them in or upload a file (CSV, Excel, PDF, screenshot, etc). We will re-run the optimizer with them in the mix and show how they would change your allocation and PRISM score.</p>
         <div class="candidate-row">
           <input type="text" id="candidate-input" placeholder="e.g. TSLA" maxlength="8" />
           <button id="btn-add-candidate" class="btn">+ Add</button>
+          <label for="candidate-file" class="btn" title="Upload a file with tickers">&#128206; Upload watchlist</label>
+          <input type="file" id="candidate-file" multiple hidden
+                 accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.ods,.json,.pdf,.docx,.png,.jpg,.jpeg,.webp,.heic,.gif,.bmp,.tif,.tiff" />
           <button id="btn-reoptimize" class="btn btn-primary" style="display:none">Re-optimize with these &#8594;</button>
         </div>
+        <div id="candidate-file-status" class="sub" style="display:none"></div>
         <div id="candidate-chips" class="file-chips"></div>
         <div id="reopt-loading" class="loading-wrap" style="display:none"><div class="spinner"></div><p>Running optimizer with new stocks&#8230;</p><p class="sub">Downloading price history for candidates</p></div>
         <div id="reopt-msg" class="msg" style="display:none"></div>
@@ -566,7 +570,44 @@ function initCandidates() {
   input.addEventListener('keydown', function(e) { if (e.key === 'Enter') addCandidate(); });
   addBtn.addEventListener('click', addCandidate);
   reoptBtn.addEventListener('click', runReoptimize);
+  var fileInput = $('candidate-file');
+  if (fileInput) fileInput.addEventListener('change', function() { parseCandidateFiles(this.files); this.value = ''; });
   renderCandidateChips();
+}
+
+async function parseCandidateFiles(fileList) {
+  if (!fileList || !fileList.length) return;
+  var status = $('candidate-file-status');
+  status.textContent = 'Reading ' + fileList.length + ' file' + (fileList.length > 1 ? 's' : '') + '...';
+  status.style.display = 'block';
+  clearMsg('reopt-msg');
+  var fd = new FormData();
+  for (var i = 0; i < fileList.length; i++) fd.append('files', fileList[i]);
+  try {
+    var res = await fetch('/api/parse', { method: 'POST', body: fd });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error);
+    var existing = new Set(holdings.map(function(h) { return h.ticker; }));
+    var added = 0, skipped = 0;
+    (data.holdings || []).forEach(function(h) {
+      var t = (h.ticker || '').toUpperCase().trim();
+      if (!t) return;
+      if (existing.has(t)) { skipped++; return; }
+      if (candidateTickers.includes(t)) { skipped++; return; }
+      candidateTickers.push(t);
+      added++;
+    });
+    var parts = [];
+    if (added) parts.push('Added ' + added + ' ticker' + (added > 1 ? 's' : ''));
+    if (skipped) parts.push(skipped + ' already in portfolio or list');
+    if (data.notes && data.notes.length) parts.push(data.notes.join('; '));
+    status.textContent = parts.join('. ') || 'No tickers found in file.';
+    if (!added && !skipped) showMsg('reopt-msg', 'No tickers found in the uploaded file.', 'info');
+    renderCandidateChips();
+  } catch (e) {
+    status.style.display = 'none';
+    showMsg('reopt-msg', 'File error: ' + e.message);
+  }
 }
 
 function addCandidate() {
