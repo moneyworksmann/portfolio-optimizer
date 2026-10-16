@@ -178,6 +178,14 @@ def holdings_from_rows(rows: list, source: str = 'file') -> tuple:
         role = _role_of(c)
         if role and role not in cols:
             cols[role] = j
+    # PDF tables often split headers across two rows (e.g. Google Finance puts
+    # "Date of Acquisition" one row above "Symbol"). Check the row above for
+    # any roles we missed.
+    if best > 0:
+        for j, c in enumerate(rows[best - 1]):
+            role = _role_of(c)
+            if role and role not in cols:
+                cols[role] = j
     # "Symbol" beats a "Name" column that also looked like a ticker source.
     get = lambda r, role: r[cols[role]] if role in cols and cols[role] < len(r) else None
 
