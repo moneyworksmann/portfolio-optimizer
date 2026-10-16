@@ -6,7 +6,7 @@
 'use strict';
 
 // ── State ────────────────────────────────────────────────────────
-let holdings = [];   // [{ticker, shares, avg_cost}]
+let holdings = [];   // [{ticker, shares, avg_cost, date?}]
 let charts   = {};   // Chart.js instances keyed by name
 
 const PALETTE = [
@@ -62,7 +62,7 @@ function setupDrop(zoneId, inputId, handler) {
   input.addEventListener('change', () => { if (input.files[0]) handler(input.files[0]); });
 }
 
-// ── CSV handler ──────────────────────────────────────────────────
+// ── File handler (CSV, PDF, Excel) ───────────────────────────────
 async function handleCsv(file) {
   setUploadLoading(true);
   clearMsg('upload-msg');
@@ -70,8 +70,11 @@ async function handleCsv(file) {
   const fd = new FormData();
   fd.append('file', file);
 
+  const ext = (file.name || '').split('.').pop().toLowerCase();
+  const endpoint = ext === 'pdf' ? '/api/parse/pdf' : '/api/parse/csv';
+
   try {
-    const data = await post('/api/parse/csv', fd, true);
+    const data = await post(endpoint, fd, true);
     if (data.error) throw new Error(data.error);
     holdings = data.holdings;
     goReview();
@@ -160,7 +163,7 @@ window.removeManual = function(i) {
 
 // ── CSV template download ─────────────────────────────────────────
 function downloadTemplate() {
-  const csv = 'ticker,shares,avg_cost\nAAPL,10,150.00\nMSFT,5,280.00\nNVDA,2,120.00\n';
+  const csv = 'ticker,shares,avg_cost,date\nAAPL,10,150.00,2023-01-15\nMSFT,5,280.00,2023-06-01\nNVDA,2,120.00,2024-02-10\n';
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
     download: 'portfolio_template.csv',
@@ -171,7 +174,7 @@ function downloadTemplate() {
 // ── Review table ─────────────────────────────────────────────────
 function initReview() {
   document.getElementById('btn-add-row').addEventListener('click', () => {
-    holdings.push({ ticker: '', shares: 0, avg_cost: null });
+    holdings.push({ ticker: '', shares: 0, avg_cost: null, date: null });
     renderReview();
   });
   document.getElementById('btn-analyze').addEventListener('click', runAnalyze);
@@ -196,6 +199,8 @@ function renderReview() {
            data-i="${i}" data-f="shares" placeholder="0" step="any" min="0" /></td>
       <td><input type="number" value="${h.avg_cost != null ? h.avg_cost : ''}"
            data-i="${i}" data-f="avg_cost" placeholder="Optional" step="any" min="0" /></td>
+      <td><input type="date" value="${h.date || ''}"
+           data-i="${i}" data-f="date" /></td>
       <td><button class="btn-del" data-i="${i}">×</button></td>`;
     tbody.appendChild(tr);
   });
@@ -209,6 +214,7 @@ function renderReview() {
       const fld = e.target.dataset.f;
       let v = e.target.value;
       if (fld === 'ticker') v = v.toUpperCase().trim();
+      else if (fld === 'date') v = v || null;
       else v = v === '' ? null : +v;
       holdings[idx][fld] = v;
     });

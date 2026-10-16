@@ -10,6 +10,11 @@ import re
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
 
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
+
 from portfolio_optimizer import (
     calculate_portfolio,
     fetch_historical_performance,
@@ -41,16 +46,23 @@ def parse_csv():
         df = pd.read_csv(io.StringIO(content))
         df.columns = [c.strip().lower().replace(' ', '_') for c in df.columns]
 
-        # Normalise column names to ticker / shares / avg_cost
+        # Normalise column names to ticker / shares / avg_cost / date
         rename = {}
         for col in df.columns:
             if col in ('ticker', 'symbol', 'stock', 'security', 'name'):
                 rename[col] = 'ticker'
-            elif col in ('shares', 'quantity', 'qty', 'units', 'amount', 'position'):
+            elif col in ('shares', 'quantity', 'qty', 'units', 'amount', 'position',
+                         '#_shares'):
                 rename[col] = 'shares'
             elif col in ('avg_cost', 'avg_price', 'purchase_price', 'cost_basis',
-                         'price', 'cost', 'average_cost', 'average_price'):
+                         'price', 'cost', 'average_cost', 'average_price',
+                         'average_cost/share_($)', 'avg_cost/share',
+                         'average_cost/share'):
                 rename[col] = 'avg_cost'
+            elif col in ('date', 'date_acquired', 'date_of_acquisition',
+                         'purchase_date', 'acquisition_date', 'bought',
+                         'trade_date', 'buy_date'):
+                rename[col] = 'date'
         df = df.rename(columns=rename)
 
         if 'ticker' not in df.columns:
@@ -59,14 +71,18 @@ def parse_csv():
         holdings = []
         for _, row in df.iterrows():
             ticker = str(row['ticker']).upper().strip()
-            if not ticker or ticker in ('NAN', 'TICKER', 'SYMBOL'):
+            if not ticker or ticker in ('NAN', 'TICKER', 'SYMBOL', '-', ''):
                 continue
             shares = float(row['shares']) if 'shares' in df.columns and pd.notna(row.get('shares')) else 0
             avg_cost = (float(row['avg_cost'])
                         if 'avg_cost' in df.columns and pd.notna(row.get('avg_cost'))
                         else None)
+            date = _parse_date(row.get('date')) if 'date' in df.columns else None
             if shares > 0:
-                holdings.append({'ticker': ticker, 'shares': shares, 'avg_cost': avg_cost})
+                h = {'ticker': ticker, 'shares': shares, 'avg_cost': avg_cost}
+                if date:
+                    h['date'] = date
+                holdings.append(h)
 
         if not holdings:
             return jsonify({'error': 'No valid holdings found in CSV'}), 400
@@ -74,6 +90,170 @@ def parse_csv():
         return jsonify({'holdings': holdings})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+
+
+def _parse_date(val):
+    """Try to convert a value to YYYY-MM-DD string."""
+    if pd.isna(val) or val is None:
+        return None
+    s = str(val).strip()
+    if not s or s == '-':
+        return None
+    for fmt in ('%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y',
+                '%m/%d/%y', '%Y/%m/%d', '%d-%m-%Y', '%b %d, %Y',
+                '%B %d, %Y', '%d %b %Y', '%d %B %Y'):
+        try:
+            return pd.Timestamp(s).strftime('%Y-%m-%d')
+        except Exception:
+            pass
+        try:
+            from datetime import datetime
+            return datetime.strptime(s, fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+    try:
+        return pd.to_datetime(s, dayfirst=False).strftime('%Y-%m-%d')
+    except Exception:
+        return None
+
+
+# ─── PDF PARSE ───────────────────────────────────────────────────
+
+_TICKER_KEYS = {'symbol', 'ticker', 'stock', 'security'}
+_SHARES_KEYS = {'shares', 'quantity', 'qty', '#_shares', '#shares',
+                'units', 'amount', 'position'}
+_COST_KEYS = {'avg_cost', 'avg_price', 'purchase_price', 'cost_basis',
+              'average_cost/share_($)', 'average_cost/share',
+              'average_cost', 'average_price', 'cost', 'price',
+              'cost_basis_($)'}
+_DATE_KEYS = {'date', 'date_acquired', 'date_of_acquisition',
+              'purchase_date', 'acquisition_date', 'bought',
+              'trade_date', 'buy_date'}
+
+
+def _classify_header(text):
+    """Return field name if text looks like a known column header."""
+    t = text.lower().strip().replace(' ', '_')
+    if t in _TICKER_KEYS:
+        return 'ticker'
+    if t in _SHARES_KEYS:
+        return 'shares'
+    if t in _COST_KEYS:
+        return 'avg_cost'
+    if t in _DATE_KEYS:
+        return 'date'
+    return None
+
+
+def _build_col_map(table):
+    """Scan the first few rows to find column indices for known fields.
+
+    Handles PDFs where headers span multiple rows or are merged with
+    the first data value via newlines (e.g. "Symbol\\nAAPL").
+    """
+    col_map = {}
+    for row_idx in range(min(4, len(table))):
+        row = table[row_idx]
+        for col_idx, cell in enumerate(row):
+            if col_idx in col_map.values():
+                continue
+            if cell is None:
+                continue
+            parts = str(cell).split('\n')
+            for part in parts:
+                field = _classify_header(part)
+                if field and field not in col_map:
+                    col_map[field] = col_idx
+    return col_map
+
+
+def _extract_cell(row, col_map, field):
+    """Get the data value from a cell, stripping any header line."""
+    idx = col_map.get(field)
+    if idx is None or idx >= len(row):
+        return None
+    val = row[idx]
+    if val is None:
+        return None
+    parts = str(val).split('\n')
+    # If multi-line, the header is the first line; data is the last.
+    return parts[-1].strip() if parts else None
+
+
+@app.route('/api/parse/pdf', methods=['POST'])
+def parse_pdf():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    if pdfplumber is None:
+        return jsonify({'error': 'PDF parsing not available — install pdfplumber'}), 400
+
+    f = request.files['file']
+    try:
+        pdf = pdfplumber.open(io.BytesIO(f.read()))
+        holdings = []
+        seen = set()
+
+        for page in pdf.pages:
+            tables = page.extract_tables()
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+
+                col_map = _build_col_map(table)
+                if 'ticker' not in col_map:
+                    continue
+
+                for row in table:
+                    ticker_raw = _extract_cell(row, col_map, 'ticker')
+                    if not ticker_raw:
+                        continue
+                    ticker = ticker_raw.upper().strip()
+                    if not ticker or ticker in ('-', 'NAN', 'TICKER', 'SYMBOL',
+                                                '(OPTIONAL)', ''):
+                        continue
+                    if not re.match(r'^[A-Z]{1,5}$', ticker):
+                        continue
+                    if ticker in seen:
+                        continue
+
+                    shares_raw = _extract_cell(row, col_map, 'shares')
+                    shares = 0
+                    if shares_raw:
+                        try:
+                            shares = float(shares_raw.replace(',', ''))
+                        except ValueError:
+                            pass
+
+                    cost_raw = _extract_cell(row, col_map, 'avg_cost')
+                    avg_cost = None
+                    if cost_raw:
+                        try:
+                            avg_cost = float(cost_raw.replace(',', '')
+                                             .replace('$', ''))
+                        except ValueError:
+                            pass
+
+                    date_raw = _extract_cell(row, col_map, 'date')
+                    date = _parse_date(date_raw) if date_raw else None
+
+                    if shares > 0:
+                        seen.add(ticker)
+                        h = {'ticker': ticker, 'shares': shares,
+                             'avg_cost': avg_cost}
+                        if date:
+                            h['date'] = date
+                        holdings.append(h)
+
+        pdf.close()
+
+        if not holdings:
+            return jsonify({'error': 'No holdings found in PDF. '
+                            'Make sure it contains a table with ticker/symbol '
+                            'and shares columns.'}), 400
+
+        return jsonify({'holdings': holdings})
+    except Exception as e:
+        return jsonify({'error': f'Error parsing PDF: {e}'}), 400
 
 
 # ─── SCREENSHOT PARSE ─────────────────────────────────────────────────────────
@@ -254,4 +434,6 @@ def analyze():
 # ─── ENTRY ────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    import os
+    port = int(os.environ.get('PORT', 5050))
+    app.run(debug=True, port=port)
