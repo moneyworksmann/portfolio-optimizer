@@ -1,2 +1,2 @@
 [tool.vercel]
-entrypoint = "portfolio-intelligence.app:app"
+entrypoint = "wsgi:app"
