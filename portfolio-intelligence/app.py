@@ -41,25 +41,6 @@ def health():
     return jsonify({'status': 'ok'})
 
 
-@app.route('/api/debug-pdf', methods=['POST'])
-def debug_pdf():
-    """Temporary: show raw pdfplumber table structure."""
-    import pdfplumber
-    f = request.files.get('files') or request.files.get('file')
-    if not f:
-        return jsonify({'error': 'no file'}), 400
-    pdf = pdfplumber.open(io.BytesIO(f.read()))
-    result = []
-    for pi, page in enumerate(pdf.pages):
-        tables = page.extract_tables()
-        for ti, table in enumerate(tables):
-            rows = []
-            for ri, row in enumerate(table[:6]):
-                rows.append({'row': ri, 'cells': row})
-            result.append({'page': pi, 'table': ti, 'total_rows': len(table), 'first_rows': rows})
-    pdf.close()
-    return jsonify(result)
-
 
 # ── ingest ───────────────────────────────────────────────────────────────────
 
