@@ -26,6 +26,7 @@ from threading import Lock
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 
 from .market_data import MarketData, download_closes, lookup_sectors
 
@@ -262,3 +263,174 @@ def _callout(f, i, n, e, sector_weights, weights, corr) -> str:
                 f'A bad quarter for this stock hits you hard.')
 
     return 'Your portfolio looks reasonably balanced.'
+
+
+# ── perfect score description ───────────────────────────────────────────────
+
+PERFECT_SCORE_DESCRIPTION = (
+    'A perfect 100 PRISM score would require a portfolio that is equally spread '
+    'across many sectors (no sector dominance), holds completely uncorrelated '
+    'assets (each moves independently), has annualised volatility at or below '
+    '10%, and has no single holding above an equal-weight share. In practice, '
+    'real stock portfolios rarely score above 80 because equities are inherently '
+    'correlated and volatile. A mix of stocks, bonds, commodities and real '
+    'estate across global markets comes closest.'
+)
+
+
+# ── max achievable score ────────────────────────────────────────────────────
+
+def _prism_from_weights(w_arr, tickers, returns_matrix, corr, sectors):
+    """Compute PRISM sub-scores from a weight array (used by the optimizer)."""
+    weights = {t: float(w_arr[i]) for i, t in enumerate(tickers)}
+
+    # sector weights
+    sector_w: dict = {}
+    for t, w in weights.items():
+        s = sectors.get(t, 'Other')
+        sector_w[s] = sector_w.get(s, 0.0) + w
+
+    # portfolio returns
+    port_ret = pd.Series(returns_matrix @ w_arr, dtype=float)
+
+    f = score_diversification(sector_w)
+    i_score = score_correlation(corr)  # correlation is fixed for given tickers
+    n = score_volatility(port_ret)
+    e = score_exposure(weights)
+
+    return (f + i_score + n + e) / 4, {'F': f, 'I': i_score, 'N': n, 'E': e}
+
+
+def max_achievable(md: MarketData, tickers: list, current_weights: dict) -> dict:
+    """Find the weight allocation that maximises the PRISM score.
+
+    Only changes weights — the set of tickers stays fixed.
+    Returns max_score, max_sub_scores, max_weights, improvements, and
+    perfect_score_description.
+    """
+    n = len(tickers)
+    if n < 2:
+        return {'available': False}
+
+    sectors = md.sectors
+    corr = md.correlation().reindex(index=tickers, columns=tickers)
+    returns_df = md.returns[tickers] if hasattr(md, 'returns') and not md.returns.empty else None
+    if returns_df is None or returns_df.empty:
+        return {'available': False}
+    returns_matrix = returns_df.values
+
+    # Objective: minimise negative PRISM score
+    def neg_prism(w):
+        score, _ = _prism_from_weights(w, tickers, returns_matrix, corr, sectors)
+        return -score
+
+    bounds = [(0.01 / n, 1.0)] * n  # every holding keeps a tiny sliver
+    constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+
+    # Start from equal weight and from current weights, pick the better result
+    best_score = -np.inf
+    best_w = None
+    for x0 in [np.ones(n) / n, np.array([current_weights.get(t, 1/n) for t in tickers])]:
+        x0 = x0 / x0.sum()  # normalise
+        result = minimize(neg_prism, x0, method='SLSQP',
+                          bounds=bounds, constraints=constraints,
+                          options={'maxiter': 500, 'ftol': 1e-9})
+        if result.success or True:  # use result even if not converged
+            score_val = -result.fun
+            if score_val > best_score:
+                best_score = score_val
+                best_w = result.x
+
+    if best_w is None:
+        return {'available': False}
+
+    # Normalise and round
+    best_w = best_w / best_w.sum()
+    max_score = round(best_score, 1)
+    _, max_sub = _prism_from_weights(best_w, tickers, returns_matrix, corr, sectors)
+    max_weights = {t: round(float(best_w[i]), 4) for i, t in enumerate(tickers)}
+
+    # Current sub-scores for comparison
+    cur_sw = md.sector_weights(current_weights)
+    cur_pr = md.portfolio_returns(current_weights)
+    cur_f = score_diversification(cur_sw)
+    cur_i = score_correlation(corr)
+    cur_n = score_volatility(cur_pr)
+    cur_e = score_exposure(current_weights)
+    cur_sub = {'F': cur_f, 'I': cur_i, 'N': cur_n, 'E': cur_e}
+
+    # Build improvement tips
+    improvements = _build_improvements(
+        cur_sub, max_sub, current_weights, max_weights,
+        tickers, sectors, md, corr,
+    )
+
+    return {
+        'available': True,
+        'max_score': max_score,
+        'max_sub_scores': {k: round(v, 1) for k, v in max_sub.items()},
+        'max_weights': max_weights,
+        'improvements': improvements,
+        'perfect_score_description': PERFECT_SCORE_DESCRIPTION,
+    }
+
+
+def _build_improvements(cur_sub, max_sub, cur_w, max_w, tickers, sectors, md, corr):
+    """Generate specific actionable tips for each improvable dimension."""
+    tips = []
+    threshold = 2.0  # only mention if improvement is >= 2 points
+
+    # F — Diversification
+    if max_sub['F'] - cur_sub['F'] >= threshold:
+        cur_sw = md.sector_weights(cur_w)
+        max_sw = md.sector_weights(max_w)
+        if cur_sw:
+            top_sector = max(cur_sw, key=cur_sw.get)
+            cur_pct = round(cur_sw[top_sector] * 100)
+            new_pct = round(max_sw.get(top_sector, 0) * 100)
+            tips.append(
+                f'Rebalance to spread more evenly across sectors — reduce '
+                f'{top_sector} from {cur_pct}% to {new_pct}%.'
+            )
+
+    # I — Correlation (weights cannot change the correlation matrix, but they
+    # affect which pairs dominate; the score itself is fixed for these tickers,
+    # so we only note it if there is a meaningful gap vs perfect)
+    if max_sub['I'] - cur_sub['I'] >= threshold:
+        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        pairs = upper.stack()
+        if not pairs.empty:
+            a, b = pairs.idxmax()
+            tips.append(
+                f'Reduce correlation by shifting weight from {a}/{b} '
+                f'(highly correlated) to less correlated holdings.'
+            )
+
+    # N — Volatility
+    if max_sub['N'] - cur_sub['N'] >= threshold:
+        # Find lowest and highest vol tickers
+        if hasattr(md, 'returns') and not md.returns.empty:
+            vols = {t: float(md.returns[t].std() * np.sqrt(TRADING_DAYS))
+                    for t in tickers if t in md.returns.columns}
+            if vols:
+                low_vol = min(vols, key=vols.get)
+                high_vol = max(vols, key=vols.get)
+                tips.append(
+                    f'Lower portfolio volatility by increasing weight in '
+                    f'{low_vol} (lowest vol) and reducing {high_vol} (highest vol).'
+                )
+
+    # E — Exposure
+    if max_sub['E'] - cur_sub['E'] >= threshold:
+        top = max(cur_w, key=cur_w.get)
+        cur_pct = round(cur_w[top] * 100)
+        new_pct = round(max_w.get(top, 0) * 100)
+        tips.append(
+            f'Reduce concentration — {top} at {cur_pct}% is too dominant, '
+            f'bring it to {new_pct}%.'
+        )
+
+    if not tips:
+        tips.append('Your current weights are already near the best achievable PRISM score for these holdings.')
+
+    return tips

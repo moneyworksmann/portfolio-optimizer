@@ -134,6 +134,7 @@ def analyze():
         'performance': portfolio.performance_vs_benchmark(md, shares, purchase),
         'optimization': (opt := optimizer.analyse(md, weights, book['total_value'])),
         'prism': prism.compute(md, weights),
+        'prism_max': _prism_max(md, weights),
         'prism_suggested': _prism_for_optimal(md, opt),
         'hindsight': _hindsight(lots, md),
         'meta': {
@@ -151,6 +152,19 @@ def _hindsight(lots, md):
         return hindsight.analyse([l for l in lots if l['ticker'] in md.valid], md.sectors)
     except Exception as e:  # never let the history view sink the whole analysis
         return {'available': False, 'reason': f'Could not build the since-you-bought view: {e}'}
+
+
+def _prism_max(md, weights):
+    """Compute the maximum achievable PRISM score for the current tickers."""
+    try:
+        tickers = [t for t in md.valid if t in weights and weights[t] > 0]
+        if len(tickers) < 2:
+            return None
+        total = sum(weights[t] for t in tickers)
+        norm = {t: weights[t] / total for t in tickers}
+        return prism.max_achievable(md, tickers, norm)
+    except Exception:
+        return None
 
 
 def _prism_for_optimal(md, opt):

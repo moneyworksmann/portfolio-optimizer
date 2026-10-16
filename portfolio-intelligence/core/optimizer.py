@@ -117,6 +117,88 @@ def analyse(md, current_weights: dict, total_value: float = 0.0) -> dict:
             })
 
     # ── suggested changes: the trades that turn today's mix into the optimal one ──
+    # Pre-compute per-ticker stats for reason generation
+    ann_returns = {t: float(mean_returns.get(t, 0.0)) * TRADING_DAYS * 100 for t in tickers}
+    ann_vols = {t: float(np.sqrt(cov_matrix.loc[t, t] * TRADING_DAYS)) * 100 for t in tickers}
+    # Correlation matrix from covariance
+    std_devs = np.sqrt(np.diag(cov_matrix.values))
+    std_outer = np.outer(std_devs, std_devs)
+    std_outer[std_outer == 0] = 1e-9
+    corr_matrix = pd.DataFrame(
+        cov_matrix.values / std_outer, index=cov_matrix.index, columns=cov_matrix.columns
+    )
+    sectors = getattr(md, 'sectors', {})
+    avg_vol = np.mean(list(ann_vols.values())) if ann_vols else 0.0
+    avg_sharpe = np.mean([
+        ann_returns[t] / ann_vols[t] if ann_vols[t] > 0 else 0.0 for t in tickers
+    ]) if tickers else 0.0
+
+    def _trade_reason(ticker, action, cw, ow):
+        ret = ann_returns[ticker]
+        vol = ann_vols[ticker]
+        sharpe_i = ret / vol if vol > 0 else 0.0
+        sector = sectors.get(ticker, 'Unknown')
+
+        if action == 'Keep':
+            return f'Well-positioned at current weight ({round(cw * 100, 1)}%).'
+
+        # Find the ticker's max correlation with other holdings
+        other_tickers = [t for t in tickers if t != ticker]
+        max_corr_ticker, max_corr_val = None, 0.0
+        if other_tickers:
+            for ot in other_tickers:
+                c = float(corr_matrix.loc[ticker, ot])
+                if abs(c) > abs(max_corr_val):
+                    max_corr_val = c
+                    max_corr_ticker = ot
+
+        # Other tickers in the same sector
+        sector_tickers = [t for t in tickers if sectors.get(t) == sector and t != ticker]
+
+        if action == 'Add':
+            parts = []
+            if ret > 0:
+                parts.append(f'{ret:+.1f}% annualized return')
+            if sharpe_i > 0.5:
+                parts.append(f'strong risk-adjusted return (Sharpe {sharpe_i:.2f})')
+            if max_corr_ticker and max_corr_val < 0.5:
+                parts.append(f'low correlation with holdings (max {max_corr_val:.2f} vs {max_corr_ticker})')
+            if not sector_tickers and sector != 'Unknown':
+                parts.append(f'diversifies into {sector}')
+            if not parts:
+                parts.append(f'{ret:+.1f}% return with {vol:.1f}% volatility')
+            return '; '.join(parts) + '.'
+
+        if action == 'Trim':
+            parts = []
+            if max_corr_ticker and max_corr_val > 0.7:
+                parts.append(f'high correlation ({max_corr_val:.2f}) with {max_corr_ticker}')
+            if vol > avg_vol:
+                parts.append(f'above-average volatility ({vol:.1f}%)')
+            if sharpe_i < avg_sharpe:
+                parts.append('below-average risk-adjusted return')
+            if sector_tickers:
+                parts.append(f'overweight in {sector} sector')
+            if not parts:
+                parts.append(f'rebalancing from {round(cw * 100, 1)}% to {round(ow * 100, 1)}%')
+            return '; '.join(parts) + '.'
+
+        if action == 'Exit':
+            parts = []
+            if ret < 0:
+                parts.append(f'negative annualized return ({ret:+.1f}%)')
+            if vol > 0 and sharpe_i < 0.1:
+                parts.append(f'very low risk-adjusted return (Sharpe {sharpe_i:.2f})')
+            if max_corr_ticker and max_corr_val > 0.7:
+                parts.append(f'redundant with {max_corr_ticker} (correlation {max_corr_val:.2f})')
+            if vol > avg_vol * 1.3:
+                parts.append(f'high volatility ({vol:.1f}%)')
+            if not parts:
+                parts.append(f'optimizer finds no allocation benefit ({ret:+.1f}% return, {vol:.1f}% vol)')
+            return '; '.join(parts) + '.'
+
+        return ''
+
     trades = []
     for t, cw, ow in zip(tickers, current, optimal):
         delta = float(ow - cw)
@@ -138,6 +220,7 @@ def analyse(md, current_weights: dict, total_value: float = 0.0) -> dict:
             'shares': round(dollars / price, 4) if dollars is not None and price else None,
             'price': round(price, 2) if price else None,
             'exp_return_pct': round(float(mean_returns.get(t, 0.0)) * TRADING_DAYS * 100, 2),
+            'reason': _trade_reason(t, action, cw, ow),
         })
     order = {'Add': 0, 'Trim': 1, 'Exit': 2, 'Keep': 3}
     trades.sort(key=lambda r: (order[r['action']], -abs(r['change_pct'])))

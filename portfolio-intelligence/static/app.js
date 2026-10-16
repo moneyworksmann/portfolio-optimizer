@@ -467,6 +467,38 @@ function chYear(d) {
 }
 
 // ── Chapter 7: risk health (PRISM) ───────────────────────────────
+function _prismMaxHtml(d) {
+  const pm = d.prism_max;
+  if (!pm?.available) return '';
+  const pr = d.prism;
+  const tone = (v) => (v >= 70 ? C.leaf : v >= 40 ? C.sun : C.clay);
+  const dims = [['F', 'Diversification'], ['I', 'Independence'], ['N', 'Calm'], ['E', 'Balance']];
+  const gap = pm.max_score - pr.prism_score;
+  const pct = (v) => Math.min(100, Math.max(0, v));
+
+  return `<div class="panel" style="margin-top:16px">
+    <h3>Path to your best score</h3>
+    <p class="hint">The highest PRISM score achievable by rebalancing your current holdings</p>
+    <div class="score-path">
+      <div class="score-path-row">
+        <span class="score-path-label">Now</span>
+        <div class="bar-track" style="position:relative;flex:1">
+          <div class="bar-fill" style="width:${pct(pr.prism_score)}%;background:${tone(pr.prism_score)}"></div>
+          <div class="bar-fill" style="width:${pct(pm.max_score)}%;background:${tone(pm.max_score)};opacity:0.25;position:absolute;top:0;left:0;height:100%;border-radius:6px"></div>
+        </div>
+        <span class="num" style="min-width:80px;text-align:right"><b>${pr.prism_score.toFixed(0)}</b> → <b style="color:${tone(pm.max_score)}">${pm.max_score.toFixed(0)}</b></span>
+      </div>
+    </div>
+    ${gap >= 1 ? `<p style="margin:10px 0 0;font-size:.92em;color:${C.forest}"><b>+${gap.toFixed(0)} points</b> available through rebalancing alone</p>` : `<p style="margin:10px 0 0;font-size:.92em;color:${C.leaf}">Your weights are already near-optimal for these holdings.</p>`}
+    ${dims.map(([k, n]) => {
+      const cur = pr.sub_scores[k], best = pm.max_sub_scores[k], diff = best - cur;
+      return diff >= 1 ? `<div class="bar-row" style="margin-top:6px"><span style="min-width:110px"><b>${n}</b></span><div class="bar-track"><div class="bar-fill" style="width:${pct(cur)}%;background:${tone(cur)}"></div></div><span class="num">${cur.toFixed(0)} → <b style="color:${tone(best)}">${best.toFixed(0)}</b></span></div>` : '';
+    }).join('')}
+    ${pm.improvements?.length ? `<div style="margin-top:14px"><b style="font-size:.93em">How to get there:</b><ul class="prism-tips">${pm.improvements.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+    <p class="hint" style="margin-top:12px;font-size:.85em;border-top:1px solid ${C.line};padding-top:10px"><b>What would a perfect 100 look like?</b> ${esc(pm.perfect_score_description)}</p>
+  </div>`;
+}
+
 function chRisk(d) {
   const pr = d.prism;
   if (!pr?.available) return null;
@@ -484,7 +516,8 @@ function chRisk(d) {
         ${dims.map(([k, n, h]) => `<div class="bar-row"><span><b>${n}</b><br><span class="sub">${h}</span></span><div class="bar-track"><div class="bar-fill" style="width:${pr.sub_scores[k]}%;background:${tone(pr.sub_scores[k])}"></div></div><span class="num">${pr.sub_scores[k].toFixed(0)}</span></div>`).join('')}
         ${Object.values(pr.benchmarks).map((b) => `<div class="bench-row"><span>${esc(b.label)}</span><b>${b.score.toFixed(0)}</b></div>`).join('')}
       </div>
-      <div class="panel"><h3>Do your holdings move together?</h3><p class="hint">Correlation of daily returns, 5 years</p><div style="overflow-x:auto">${matrix(pr.correlation_matrix)}</div></div></div>`,
+      <div class="panel"><h3>Do your holdings move together?</h3><p class="hint">Correlation of daily returns, 5 years</p><div style="overflow-x:auto">${matrix(pr.correlation_matrix)}</div></div></div>
+    ${_prismMaxHtml(d)}`,
   };
 }
 
@@ -519,8 +552,8 @@ function chSuggest(d) {
         <div class="panel"><h3>Today vs suggested weights</h3><p class="hint">% of portfolio</p><div class="chart-box"><canvas id="c-weights2"></canvas></div></div>
       </div>
       <div class="panel" style="margin-top:16px"><h3>The trades</h3><p class="hint">Dollar and share amounts use today’s value and prices</p>
-        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th class="num">$ amount</th><th class="num">Shares</th><th class="num">Exp. return</th></tr></thead><tbody>
-        ${o.trades.map((t) => `<tr><td><b>${esc(t.ticker)}</b></td><td><span class="pill pill-${t.action.toLowerCase()}">${t.action}</span></td><td class="num">${t.current_pct.toFixed(1)}%</td><td class="num">${t.target_pct.toFixed(1)}%</td><td class="num ${t.change_pct >= 0 ? 'up' : 'down'}">${t.change_pct >= 0 ? '+' : ''}${t.change_pct.toFixed(1)} pts</td><td class="num">${t.dollars != null ? signUsd(t.dollars) : '—'}</td><td class="num">${t.shares != null ? (t.shares >= 0 ? '+' : '') + t.shares.toFixed(3) : '—'}</td><td class="num">${pct(t.exp_return_pct)}</td></tr>`).join('')}
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th class="num">$ amount</th><th class="num">Shares</th><th class="num">Exp. return</th><th>Reason</th></tr></thead><tbody>
+        ${o.trades.map((t) => `<tr><td><b>${esc(t.ticker)}</b></td><td><span class="pill pill-${t.action.toLowerCase()}">${t.action}</span></td><td class="num">${t.current_pct.toFixed(1)}%</td><td class="num">${t.target_pct.toFixed(1)}%</td><td class="num ${t.change_pct >= 0 ? 'up' : 'down'}">${t.change_pct >= 0 ? '+' : ''}${t.change_pct.toFixed(1)} pts</td><td class="num">${t.dollars != null ? signUsd(t.dollars) : '—'}</td><td class="num">${t.shares != null ? (t.shares >= 0 ? '+' : '') + t.shares.toFixed(3) : '—'}</td><td class="num">${pct(t.exp_return_pct)}</td><td style="font-size:.85em;max-width:260px">${esc(t.reason || '')}</td></tr>`).join('')}
         </tbody></table></div></div>
 
       <div style="margin-top:16px;text-align:right">

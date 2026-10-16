@@ -207,6 +207,13 @@ input:focus { border-color: var(--leaf); box-shadow: 0 0 0 3px rgba(95, 163, 106
   .explain, .visual { transition: none; opacity: 1; transform: none; }
 }
 
+/* ── PRISM max achievable ────────────────────────────── */
+.score-path { margin: 14px 0 4px; }
+.score-path-row { display: flex; align-items: center; gap: 12px; }
+.score-path-label { font-size: 13px; font-weight: 800; color: var(--soft); min-width: 36px; }
+.prism-tips { padding-left: 18px; margin-top: 6px; font-size: 14px; color: var(--ink2); }
+.prism-tips li { margin-bottom: 6px; line-height: 1.45; }
+
 /* ── candidate stocks ────────────────────────────────── */
 .candidate-panel { border: 2px dashed var(--line); background: var(--bg2); }
 .candidate-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
