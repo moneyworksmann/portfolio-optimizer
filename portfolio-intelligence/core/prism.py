@@ -62,17 +62,22 @@ def score_correlation(corr_matrix: pd.DataFrame) -> float:
     if n < 2:
         return 100.0
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-    pairs = upper.stack()
+    pairs = upper.stack().dropna()
     if pairs.empty:
         return 100.0
-    return round(max(0.0, 1.0 - float(pairs.mean())) * 100, 1)
+    avg = float(pairs.mean())
+    if not np.isfinite(avg):
+        return 50.0
+    return round(max(0.0, 1.0 - avg) * 100, 1)
 
 
 def score_volatility(portfolio_returns: pd.Series) -> float:
     """Annualised volatility mapped onto the 10%-40% band."""
     if portfolio_returns.empty:
         return 0.0
-    ann_vol = float(portfolio_returns.std() * np.sqrt(TRADING_DAYS))
+    ann_vol = float(portfolio_returns.dropna().std() * np.sqrt(TRADING_DAYS))
+    if not np.isfinite(ann_vol):
+        return 0.0
     raw = (1 - (ann_vol - VOL_FLOOR) / (VOL_CEILING - VOL_FLOOR)) * 100
     return round(max(0.0, min(100.0, raw)), 1)
 
@@ -189,7 +194,11 @@ def compute(md: MarketData, weights: dict) -> dict:
         'weights': {k: round(v, 4) for k, v in norm.items()},
         'correlation_matrix': {
             'tickers': tickers,
-            'values': [[round(float(corr.loc[a, b]), 3) for b in tickers] for a in tickers],
+            'values': [
+                [round(float(v), 3) if np.isfinite(v := corr.loc[a, b]) else 0.0
+                 for b in tickers]
+                for a in tickers
+            ],
         },
         'backtest': _backtest(md, portfolio_returns),
         'callout': _callout(f, i, n, e, sector_weights, norm, corr),

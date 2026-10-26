@@ -58,9 +58,10 @@ def stats(weights, mean_returns, cov_matrix) -> tuple:
     """(annual return, annual volatility, Sharpe) for a weight vector."""
     weights = np.asarray(weights, dtype=float)
     ret = float(np.sum(mean_returns * weights) * TRADING_DAYS)
-    risk = float(np.sqrt(weights.T @ (cov_matrix * TRADING_DAYS) @ weights))
+    var = float(weights.T @ (cov_matrix * TRADING_DAYS) @ weights)
+    risk = float(np.sqrt(var)) if np.isfinite(var) and var > 0 else 0.0
     sharpe = ret / risk if risk > 0 else 0.0
-    return ret, risk, sharpe
+    return (ret if np.isfinite(ret) else 0.0), risk, sharpe
 
 
 def analyse(md, current_weights: dict, total_value: float = 0.0) -> dict:
@@ -108,10 +109,11 @@ def analyse(md, current_weights: dict, total_value: float = 0.0) -> dict:
     for ticker, weight in zip(tickers, current):
         if weight > 0.01:
             ret = float(mean_returns.get(ticker, 0.0)) * TRADING_DAYS * 100
-            risk = float(np.sqrt(cov_matrix.loc[ticker, ticker] * TRADING_DAYS)) * 100
+            var = cov_matrix.loc[ticker, ticker] * TRADING_DAYS
+            risk = float(np.sqrt(var)) * 100 if np.isfinite(var) and var > 0 else 0.0
             scatter.append({
                 'ticker': ticker,
-                'ret': round(ret, 2),
+                'ret': round(ret, 2) if np.isfinite(ret) else 0.0,
                 'risk': round(risk, 2),
                 'weight': round(float(weight) * 100, 2),
             })
@@ -119,13 +121,18 @@ def analyse(md, current_weights: dict, total_value: float = 0.0) -> dict:
     # ── suggested changes: the trades that turn today's mix into the optimal one ──
     # Pre-compute per-ticker stats for reason generation
     ann_returns = {t: float(mean_returns.get(t, 0.0)) * TRADING_DAYS * 100 for t in tickers}
-    ann_vols = {t: float(np.sqrt(cov_matrix.loc[t, t] * TRADING_DAYS)) * 100 for t in tickers}
+    ann_vols = {}
+    for t in tickers:
+        var = cov_matrix.loc[t, t] * TRADING_DAYS
+        ann_vols[t] = float(np.sqrt(var)) * 100 if np.isfinite(var) and var > 0 else 0.0
     # Correlation matrix from covariance
     std_devs = np.sqrt(np.diag(cov_matrix.values))
     std_outer = np.outer(std_devs, std_devs)
     std_outer[std_outer == 0] = 1e-9
+    corr_values = cov_matrix.values / std_outer
+    corr_values = np.where(np.isfinite(corr_values), corr_values, 0.0)
     corr_matrix = pd.DataFrame(
-        cov_matrix.values / std_outer, index=cov_matrix.index, columns=cov_matrix.columns
+        corr_values, index=cov_matrix.index, columns=cov_matrix.columns
     )
     sectors = getattr(md, 'sectors', {})
     avg_vol = np.mean(list(ann_vols.values())) if ann_vols else 0.0

@@ -17,6 +17,7 @@ services on two stacks (Flask + FastAPI) that each did their own downloads and
 each derived their own weights.
 """
 
+import math
 import os
 import time
 
@@ -144,7 +145,18 @@ def analyze():
         },
     }
 
-    return jsonify(payload)
+    return jsonify(_sanitize(payload))
+
+
+def _sanitize(obj):
+    """Replace NaN/Infinity floats with None so json.dumps doesn't choke."""
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    return obj
 
 
 def _hindsight(lots, md):
@@ -239,7 +251,7 @@ def reoptimize():
             'fetches': counters(),
         },
     }
-    return jsonify(payload)
+    return jsonify(_sanitize(payload))
 
 
 # ── entry ────────────────────────────────────────────────────────────────────
