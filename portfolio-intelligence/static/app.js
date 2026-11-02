@@ -695,6 +695,7 @@ async function runReoptimize() {
 }
 
 function renderReoptResults(data) {
+  window._reopt = data;
   var container = $('reopt-results');
   var o = data.optimization;
   var pc = data.prism_current;
@@ -933,10 +934,106 @@ function downloadReport() {
 
   part2 += '</div>';
 
+  // ── PART 3: WITH WATCHLIST STOCKS ──
+  var part3 = '';
+  var rd = window._reopt;
+  if (rd && rd.optimization && rd.optimization.available) {
+    var ro = rd.optimization;
+    var rim = ro.impact;
+    var rpc = rd.prism_current;
+    var rps = rd.prism_suggested;
+    var rMoves = ro.trades.filter(function(t) { return t.action !== 'Keep' || t.current_pct > 0; });
+    var rNew = ro.trades.filter(function(t) { return t.current_pct === 0 && t.target_pct > 0.5; });
+    var rNotUsed = (rd.candidates || []).filter(function(c) { return !rNew.some(function(t) { return t.ticker === c; }); });
+
+    part3 = '<hr class="divider"><div class="part">' +
+      '<div class="part-title" style="background:#8b5cf6">Part 3: With Watchlist Stocks</div>';
+
+    // Which candidates made the cut
+    if (rd.candidates && rd.candidates.length) {
+      part3 += '<div class="section"><h3>Candidates Evaluated</h3>' +
+        '<p class="hint">Stocks from your watchlist tested against your current holdings</p>';
+      if (rNew.length) {
+        part3 += '<p style="margin-bottom:8px">' + rNew.map(function(t) {
+          return '<span class="pill pill-add" style="margin-right:6px"><b>' + esc(t.ticker) + '</b> — ' + t.target_pct.toFixed(1) + '% suggested</span>';
+        }).join(' ') + '</p>';
+      }
+      if (rNotUsed.length) {
+        part3 += '<p class="hint">Not included by optimizer: ' + rNotUsed.map(esc).join(', ') + ' — risk/return profile did not improve the mix.</p>';
+      }
+      part3 += '</div>';
+    }
+
+    // Performance KPIs
+    part3 += '<div class="section"><h3>Projected Performance (with watchlist)</h3><div class="kpis">' +
+      '<div class="kpi-box"><div class="label">Expected Return</div><div class="val up">' + pct(rim.return_after_pct) + '</div><div class="sub">from ' + pct(rim.return_now_pct) + '</div></div>' +
+      '<div class="kpi-box"><div class="label">Risk (Swing)</div><div class="val">' + plainPct(rim.risk_after_pct) + '</div><div class="sub">from ' + plainPct(rim.risk_now_pct) + '</div></div>' +
+      '<div class="kpi-box"><div class="label">Sharpe Ratio</div><div class="val up">' + rim.sharpe_after.toFixed(2) + '</div><div class="sub">from ' + rim.sharpe_now.toFixed(2) + '</div></div>';
+    if (rim.dollars_per_year_after != null) {
+      part3 += '<div class="kpi-box"><div class="label">Est. Annual $</div><div class="val">' + usd(rim.dollars_per_year_after) + '</div><div class="sub">from ' + usd(rim.dollars_per_year_now) + '</div></div>';
+    }
+    part3 += '</div></div>';
+
+    // PRISM comparison
+    if (rpc && rpc.available && rps && rps.available) {
+      var rDelta = rps.prism_score - rpc.prism_score;
+      var rDeltaUp = rDelta >= 0;
+      part3 += '<div class="section"><h3>PRISM Score (with watchlist)</h3>' +
+        '<div class="compare"><div class="now"><h4>Current</h4><div class="score-num" style="color:' + tone(rpc.prism_score) + '">' + rpc.prism_score.toFixed(0) + '</div></div>' +
+        '<div class="after" style="background:#f3eef8;border-color:#c4b5d9"><h4>With Watchlist</h4><div class="score-num" style="color:' + tone(rps.prism_score) + '">' + rps.prism_score.toFixed(0) + '</div>' +
+        '<div class="hint ' + (rDeltaUp ? 'up' : 'dn') + '" style="font-weight:700;margin-top:4px">' + (rDeltaUp ? '+' : '') + rDelta.toFixed(1) + ' points</div></div></div>' +
+        '<table><thead><tr><th>Dimension</th><th class="num">Current</th><th class="num">With Watchlist</th><th class="num">Change</th></tr></thead><tbody>' +
+        dims.map(function(dd) {
+          var before = rpc.sub_scores[dd[0]], after = rps.sub_scores[dd[0]], ch = after - before;
+          return '<tr><td>' + dd[1] + '</td><td class="num">' + before.toFixed(0) + '</td><td class="num">' + after.toFixed(0) + '</td>' +
+            '<td class="num ' + (ch >= 0 ? 'up' : 'dn') + '">' + (ch >= 0 ? '+' : '') + ch.toFixed(1) + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    }
+
+    // Full suggested portfolio table
+    part3 += '<div class="section"><h3>Suggested Portfolio (with watchlist)</h3>' +
+      '<p class="hint">Complete allocation including watchlist stocks — sorted by suggested weight</p>' +
+      '<table><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Current</th><th class="num">Suggested</th><th class="num">Change</th><th>Action</th></tr></thead><tbody>' +
+      ro.trades.slice().sort(function(a, b) { return b.target_pct - a.target_pct; }).map(function(t) {
+        var sector = '';
+        var match = d.holdings.filter(function(h) { return h.ticker === t.ticker; });
+        if (match.length) sector = match[0].sector || '';
+        var isNew = t.current_pct === 0 && t.target_pct > 0;
+        return '<tr' + (isNew ? ' style="background:#f3eef8"' : '') + '>' +
+          '<td><b>' + esc(t.ticker) + '</b>' + (isNew ? ' <span class="pill" style="background:#ede5f5;color:#7c3aed;font-size:10px">NEW</span>' : '') + '</td>' +
+          '<td>' + esc(sector) + '</td>' +
+          '<td class="num">' + t.current_pct.toFixed(1) + '%</td>' +
+          '<td class="num">' + t.target_pct.toFixed(1) + '%</td>' +
+          '<td class="num ' + (t.change_pct >= 0 ? 'up' : 'dn') + '">' + (t.change_pct >= 0 ? '+' : '') + t.change_pct.toFixed(1) + ' pts</td>' +
+          '<td><span class="pill pill-' + t.action.toLowerCase() + '">' + t.action + '</span></td></tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    // Trades to execute
+    part3 += '<div class="section"><h3>Trades to Execute (with watchlist)</h3>' +
+      '<p class="hint">Turnover: ' + rim.turnover_pct.toFixed(0) + '% of portfolio. Dollar and share amounts use today&#39;s prices.</p>' +
+      '<table><thead><tr><th>Ticker</th><th>Action</th><th class="num">Now</th><th class="num">Target</th><th class="num">$ Amount</th><th class="num">Shares</th><th class="num">Exp. Return</th></tr></thead><tbody>' +
+      ro.trades.filter(function(t) { return t.action !== 'Keep'; }).map(function(t) {
+        var isNew = t.current_pct === 0 && t.target_pct > 0;
+        return '<tr' + (isNew ? ' style="background:#f3eef8"' : '') + '>' +
+          '<td><b>' + esc(t.ticker) + '</b>' + (isNew ? ' <span class="pill" style="background:#ede5f5;color:#7c3aed;font-size:10px">NEW</span>' : '') + '</td>' +
+          '<td><span class="pill pill-' + t.action.toLowerCase() + '">' + t.action + '</span></td>' +
+          '<td class="num">' + t.current_pct.toFixed(1) + '%</td>' +
+          '<td class="num">' + t.target_pct.toFixed(1) + '%</td>' +
+          '<td class="num">' + (t.dollars != null ? signUsd(t.dollars) : '') + '</td>' +
+          '<td class="num">' + (t.shares != null ? (t.shares >= 0 ? '+' : '') + t.shares.toFixed(3) : '') + '</td>' +
+          '<td class="num">' + pct(t.exp_return_pct) + '</td></tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    part3 += '</div>';
+  }
+
   var html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<title>Portfolio Intelligence Report</title><style>' + rptCss + '</style></head><body>' +
     '<div class="header"><h1>Portfolio Intelligence Report</h1><p class="date">' + today + '</p></div>' +
-    part1 + '<hr class="divider">' + part2 +
+    part1 + '<hr class="divider">' + part2 + part3 +
     '<div class="footer">Generated by Portfolio Intelligence. Built from historical data — not financial advice.</div>' +
     '</body></html>';
 
@@ -1033,7 +1130,7 @@ function showView(id) {
 window.showView = showView;
 
 function reset() {
-  files = []; holdings = []; manualItems = []; notes = []; candidateTickers = [];
+  files = []; holdings = []; manualItems = []; notes = []; candidateTickers = []; window._reopt = null;
   Object.keys(charts).forEach(destroy);
   renderFileChips();
   $('sheet-url').value = '';
