@@ -203,7 +203,7 @@ function buildStory(d) {
   window._data = d;
   const chapters = [
     chToday(d), chJourney(d), chPositions(d), chPeaks(d), chAllocation(d),
-    chYear(d), chRisk(d), chSuggest(d), chTable(d),
+    chYear(d), chRisk(d), chOutcomes(d), chSuggest(d), chTable(d),
   ].filter(Boolean);
 
   $('story').innerHTML = chapters.map((c, i) => `
@@ -518,6 +518,75 @@ function chRisk(d) {
       </div>
       <div class="panel"><h3>Do your holdings move together?</h3><p class="hint">Correlation of daily returns, 5 years</p><div style="overflow-x:auto">${matrix(pr.correlation_matrix)}</div></div></div>
     ${_prismMaxHtml(d)}`,
+  };
+}
+
+// ── Chapter: range of outcomes (Monte Carlo) ─────────────────────
+function chOutcomes(d) {
+  const m = d.monte_carlo;
+  if (!m?.available || !m.results?.current) return null;
+  const cur = m.results.current, opt = m.results.optimal;
+  const p = cur.percentiles_pct;
+  const months = (day) => (day === 0 ? 'Today' : `Month ${Math.round(day / 21)}`);
+  const lossOdds = Math.round(cur.prob_loss * 100);
+  const oneIn = cur.prob_loss > 0 ? Math.max(1, Math.round(1 / cur.prob_loss)) : null;
+  const usd0 = (n) => '$' + Math.round(n).toLocaleString('en-US');
+  const loss = (r) => (r.var_95_dollars != null ? usd0(r.var_95_dollars) : plainPct(r.var_95_pct));
+  const years = Math.max(1, Math.round(m.lookback_days / 252));
+  return {
+    id: 'outcomes', rail: 'Range of outcomes', title: 'What the next year could look like',
+    what: `Instead of one forecast, we replayed the next year ${m.paths.toLocaleString()} times using how your holdings have moved, alone and together, over the past ${years} year${years === 1 ? '' : 's'}. This shows how often each outcome came up.`,
+    how: [
+      'The fan shows the middle path (dark line), the middle half of outcomes (inner band) and 9 in 10 outcomes (outer band), starting from $1.',
+      'The bars show how often each 12-month return came up across all the replays.',
+      '<b>Bad-year loss</b> is the loss only 1 replay in 20 did worse than (95% VaR). <b>Average in those years</b> is what those worst replays lost on average (CVaR).',
+    ],
+    takeaway: [
+      `In the middle case your portfolio is <b>${pct(cur.median_return_pct)}</b> after a year, and 9 in 10 replays land between <b>${pct(p.p5)}</b> and <b>${pct(p.p95)}</b>.`,
+      `<b>${lossOdds}%</b> of replays ended the year down${oneIn ? `, roughly 1 year in ${oneIn}` : ''}. In a 1-in-20 bad year you’d lose about <b class="down">${loss(cur)}</b>.`,
+      ...(opt ? [`With the suggested mix: middle case <b>${pct(opt.median_return_pct)}</b>, ${Math.round(opt.prob_loss * 100)}% chance of a down year, 1-in-20 loss ${loss(opt)}.`] : []),
+    ],
+    caveat: `${m.unsimulated_weight_pct > 0 ? `${plainPct(m.unsimulated_weight_pct)} of your portfolio had no price history and is left out. ` : ''}These are odds built from past prices, not a prediction. Not financial advice.`,
+    visual: `
+      <div class="grid g4">
+        ${kpi('Middle case', pct(cur.median_return_pct), cur.value_percentiles ? `${usd0(cur.value_percentiles.p50)} in a year` : 'after 12 months', C.mint)}
+        ${kpi('Chance of a down year', `${lossOdds}%`, `${Math.round((cur.prob_below['-10'] ?? 0) * 100)}% chance of −10% or worse`, '#f7efd9')}
+        ${kpi('Bad-year loss (1 in 20)', loss(cur), `${plainPct(cur.var_95_pct)} of value`, '#f3e0d6')}
+        ${kpi('Average in those years', cur.cvar_95_dollars != null ? usd0(cur.cvar_95_dollars) : plainPct(cur.cvar_95_pct), `deepest dip ${plainPct(cur.max_drawdown_p95_pct)}`, '#ece6f6')}
+      </div>
+      <div class="grid g2" style="margin-top:16px">
+        <div class="panel"><h3>Growth of $1, next 12 months</h3><p class="hint">Middle path with 50% and 90% ranges</p><div class="chart-box"><canvas id="c-fan"></canvas></div></div>
+        <div class="panel"><h3>How often each return came up</h3><p class="hint">% of replays by 12-month return</p><div class="chart-box"><canvas id="c-hist"></canvas></div></div>
+      </div>
+      ${opt ? `<div class="panel" style="margin-top:16px"><h3>Your mix vs the suggested mix</h3><p class="hint">Same replays, same history</p>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th class="num">Bad case (5%)</th><th class="num">Middle</th><th class="num">Good case (95%)</th><th class="num">Chance of loss</th><th class="num">1-in-20 loss</th><th class="num">Deepest dip (1 in 20)</th></tr></thead><tbody>
+        ${[['Your mix', cur], ['Suggested mix', opt]].map(([n, r]) => `<tr><td><b>${n}</b></td><td class="num">${pct(r.percentiles_pct.p5)}</td><td class="num">${pct(r.median_return_pct)}</td><td class="num">${pct(r.percentiles_pct.p95)}</td><td class="num">${Math.round(r.prob_loss * 100)}%</td><td class="num">${loss(r)}</td><td class="num">${plainPct(r.max_drawdown_p95_pct)}</td></tr>`).join('')}
+        </tbody></table></div></div>` : ''}`,
+    draw: () => {
+      const f = cur.fan;
+      const band = (label, key, fill, bg) => ({ label, data: f.map((x) => x[key]), borderColor: 'transparent', backgroundColor: bg || 'transparent', fill, pointRadius: 0, tension: 0.3 });
+      mk('fan', 'c-fan', {
+        type: 'line',
+        data: {
+          labels: f.map((x) => months(x.day)),
+          datasets: [
+            band('95th', 'p95', '+4', 'rgba(156,197,161,.25)'),
+            band('75th', 'p75', '+2', 'rgba(95,163,106,.30)'),
+            line('Middle', f.map((x) => x.p50), C.forest),
+            band('25th', 'p25', false),
+            band('5th', 'p5', false),
+          ],
+        },
+        options: { interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: $${c.raw.toFixed(3)}` } } }, scales: { x: { grid: { display: false } }, y: { grid: { color: C.line }, ticks: { callback: (v) => '$' + v.toFixed(2) } } } },
+      });
+      const h = cur.histogram;
+      const mid = (b) => (b.from_pct + b.to_pct) / 2;
+      mk('hist', 'c-hist', {
+        type: 'bar',
+        data: { labels: h.map((b) => `${mid(b).toFixed(0)}%`), datasets: [{ label: 'Replays', data: h.map((b) => b.probability * 100), backgroundColor: h.map((b) => (mid(b) < 0 ? C.clay : C.leaf)), borderRadius: 3, categoryPercentage: 1, barPercentage: 0.95 }] },
+        options: { plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => `${h[c[0].dataIndex].from_pct.toFixed(1)}% to ${h[c[0].dataIndex].to_pct.toFixed(1)}%`, label: (c) => ` ${c.raw.toFixed(1)}% of replays` } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } }, y: { grid: { color: C.line }, ticks: { callback: (v) => v + '%' } } } },
+      });
+    },
   };
 }
 

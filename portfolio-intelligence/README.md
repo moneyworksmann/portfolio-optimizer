@@ -70,6 +70,7 @@ you arrive, the side rail tracks where you are, and the rest dims so there is on
 | Where it’s planted | Sector mix |
 | The last 12 months | Current holdings vs SPY over a year |
 | Risk health | PRISM score, its four parts, and the correlation grid |
+| Range of outcomes | Monte Carlo replays of the next 12 months for your holdings: middle case, chance of a down year, 1-in-20 loss in dollars, fan chart, histogram, and your mix vs the suggested mix |
 | Suggested changes | Its own dashboard: the trades (add / trim / exit, in % , $ and shares) that turn today’s mix into the max-Sharpe mix, expected return and $/year before and after, risk and Sharpe change, and a year replayed with both mixes |
 | Every holding | The full table per purchase |
 
