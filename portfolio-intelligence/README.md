@@ -70,6 +70,7 @@ you arrive, the side rail tracks where you are, and the rest dims so there is on
 | Where it’s planted | Sector mix |
 | The last 12 months | Current holdings vs SPY over a year |
 | Risk health | PRISM score, its four parts, and the correlation grid |
+| Range of outcomes | Monte Carlo replays of the next 12 months for your holdings: middle case, chance of a down year, 1-in-20 loss in dollars, fan chart, histogram, and your mix vs the suggested mix |
 | Suggested changes | Its own dashboard: the trades (add / trim / exit, in % , $ and shares) that turn today’s mix into the max-Sharpe mix, expected return and $/year before and after, risk and Sharpe change, and a year replayed with both mixes |
 | Every holding | The full table per purchase |
 
@@ -83,6 +84,7 @@ core/
   ingest.py             any file / Google Sheet -> purchases (ticker, shares, cost, date)
   portfolio.py          values, cost basis, P&L, weights, SPY comparison
   optimizer.py          max-Sharpe allocation, sensitivity, risk-return scatter
+  montecarlo.py         simulated return distribution: percentiles, P(loss), VaR/CVaR, drawdowns
   prism.py              four risk sub-scores, benchmarks, callout
 templates/ static/      dashboard UI: Overview · Performance · Risk Health · Efficiency · Holdings
 ```
@@ -98,6 +100,7 @@ SPY. Every downstream consumer reads a slice of that one frame:
 | P&L vs SPY | Trailing 1 year |
 | Optimiser | Trailing 1 year of closes → 251 daily returns |
 | PRISM | Full 5 years of daily returns |
+| Monte Carlo | Full 5 years by default (`lookback_days` to change) |
 
 This matters for more than speed. Because valuation, optimisation and scoring all
 read the same frame and the same weights dictionary, the three panels of the
@@ -155,7 +158,10 @@ matrix reproduce exactly, and optimal weights match to within 2e-15.
 ```
 
 Returns `summary`, `holdings`, `sector_allocation`, `performance`,
-`optimization` (now with `trades`, `impact`, `growth`), `prism`, `hindsight` and `meta`.
+`optimization` (now with `trades`, `impact`, `growth`), `prism`, `hindsight`,
+`monte_carlo` and `meta`. `monte_carlo` simulates 2,000 one-year paths for the
+current mix and the optimizer's suggested mix with a fixed seed, so a refresh
+shows the same numbers.
 
 `optimization` and `prism` each carry an `available` flag. Both need at least two
 holdings with usable price history, and degrade with a `reason` string rather
@@ -164,6 +170,29 @@ than failing the request. Tickers with no price history are listed in
 from the risk analytics — the dashboard says so explicitly rather than letting
 the numbers quietly disagree. `meta` also reports elapsed time and the number of
 network fetches the request actually cost.
+
+**`POST /api/simulate`** — the Monte Carlo engine on its own, with every
+assumption exposed so a dashboard can turn the knobs:
+
+```json
+{ "holdings": [...], "horizon_days": 252, "paths": 5000,
+  "method": "normal | student_t | bootstrap", "lookback_days": 1260,
+  "block": 5, "df": 5, "seed": 7, "weights": { "AAPL": 60, "BND": 40 } }
+```
+
+All fields but `holdings` are optional (`weights` alone also works, to simulate a
+hypothetical mix). Each allocation in `results` returns percentiles of total
+return (`p1`…`p99`), expected and median return, probability of a loss and of
+falling below −10% / −20% or beating +10% / +20%, 95% and 99% VaR and CVaR in
+percent and dollars, the median and 1-in-20 worst max drawdown, a fan of
+percentile paths for charting, and a histogram of outcomes.
+
+The three methods differ in what they assume. `normal` draws from the historical
+mean and covariance. `student_t` keeps that covariance but gives every day a
+shared fat-tailed shock, so crashes hit all holdings at once. `bootstrap`
+replays whole historical days (in blocks of `block` days if set), keeping the
+real tails and correlations with no distributional assumption. Paths are
+buy-and-hold, so winners drift to a larger share over the horizon.
 
 **`POST /api/parse`** — multipart `files` (any number, any supported format) and/or `sheet_url`; returns purchases with `ticker, shares, avg_cost, acquired, name, source`, plus notes.
 
@@ -184,6 +213,13 @@ python app.py
 ```
 
 Then open `http://localhost:5000`.
+
+Tests (no network needed, prices are faked):
+
+```bash
+pip install pytest
+python3 -m pytest
+```
 
 Screenshot ingest additionally needs `pytesseract`, `pillow`, and a system
 Tesseract install (`brew install tesseract` on macOS). Without them, CSV and
@@ -207,5 +243,9 @@ output should be read.
   calibrated against outcome data.
 - **The four dimensions are not independent.** Correlation and diversification
   overlap substantially, so an unweighted mean double-counts that overlap.
+- **Monte Carlo inherits its window.** The simulation is only as good as the
+  assumption that the next year looks like a random draw from the lookback
+  window. A five-year window that ran mostly up will produce an optimistic
+  distribution; use `bootstrap` or `student_t` to see heavier tails.
 - **No transaction costs, taxes, or rebalancing drag** are modelled anywhere in
   the optimisation.

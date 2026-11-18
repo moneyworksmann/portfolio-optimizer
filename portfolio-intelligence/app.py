@@ -9,7 +9,9 @@ Routes
                               Google Sheets link -> holdings with acquisition dates
   POST /api/parse/csv         legacy single-CSV route
   POST /api/parse/screenshot  brokerage screenshot -> holdings (OCR)
-  POST /api/analyze           holdings -> P&L, optimization, PRISM, since-you-bought
+  POST /api/analyze           holdings -> P&L, optimization, PRISM, since-you-bought,
+                              Monte Carlo return distribution
+  POST /api/simulate          holdings + options -> Monte Carlo return distribution
 
 One POST /api/analyze builds a single MarketData object and passes it to the
 valuation, optimizer and PRISM layers in turn. Before the merge this was two
@@ -23,7 +25,7 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 
-from core import hindsight, ingest, optimizer, portfolio, prism
+from core import hindsight, ingest, montecarlo, optimizer, portfolio, prism
 from core.market_data import MarketData, counters, reset_counters
 
 app = Flask(__name__)
@@ -138,6 +140,7 @@ def analyze():
         'prism_max': _prism_max(md, weights),
         'prism_suggested': _prism_for_optimal(md, opt),
         'hindsight': _hindsight(lots, md),
+        'monte_carlo': _monte_carlo(md, weights, book['total_value'], opt),
         'meta': {
             'dropped_tickers': md.dropped,
             'elapsed_ms': int((time.time() - started) * 1000),
@@ -164,6 +167,27 @@ def _hindsight(lots, md):
         return hindsight.analyse([l for l in lots if l['ticker'] in md.valid], md.sectors)
     except Exception as e:  # never let the history view sink the whole analysis
         return {'available': False, 'reason': f'Could not build the since-you-bought view: {e}'}
+
+
+# Fixed seed on the dashboard so a refresh shows the same distribution; the
+# numbers only move when holdings or prices do.
+DASHBOARD_SEED = 7
+DASHBOARD_PATHS = 2000
+
+
+def _monte_carlo(md, weights, total_value, opt):
+    """Return distribution for today's mix and, when available, the optimizer's."""
+    try:
+        compare = {}
+        if opt.get('available') and opt.get('strategies', {}).get('optimal'):
+            pcts = opt['strategies']['optimal']['weights']
+            compare['optimal'] = {t: v / 100.0 for t, v in pcts.items()}
+        return montecarlo.analyse(
+            md, weights, total_value, n_paths=DASHBOARD_PATHS,
+            compare=compare, seed=DASHBOARD_SEED,
+        )
+    except Exception as e:  # never let the simulation sink the whole analysis
+        return {'available': False, 'reason': f'Could not run the simulation: {e}'}
 
 
 def _prism_max(md, weights):
@@ -252,6 +276,88 @@ def reoptimize():
         },
     }
     return jsonify(_sanitize(payload))
+
+
+# ── Monte Carlo ─────────────────────────────────────────────────────────────
+
+def _int_opt(body, key, default):
+    v = body.get(key, default)
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        raise montecarlo.SimulationError(f'{key} must be a whole number.')
+
+
+@app.route('/api/simulate', methods=['POST'])
+def simulate():
+    """Monte Carlo distribution for the holdings, with tunable assumptions.
+
+    Body
+      holdings        same shape as /api/analyze
+      horizon_days    trading days to simulate (default 252 = one year)
+      paths           number of simulated paths (default 5000, max 50000)
+      method          normal | student_t | bootstrap (default normal)
+      lookback_days   history window for the estimates (default: all 5y)
+      block           bootstrap block length in days (default 1)
+      df              Student-t degrees of freedom (default 5)
+      seed            fix for reproducible output
+      weights         optional {ticker: weight} to simulate instead of today's mix
+                      (fractions or percentages; renormalised either way)
+    """
+    started = time.time()
+    reset_counters()
+
+    body = request.get_json(force=True, silent=True) or {}
+    lots = ingest.clean_lots(body.get('holdings', []))
+    shares, purchase_prices = ingest.normalise(lots)
+    override = {
+        str(t).upper().strip(): float(v) for t, v in (body.get('weights') or {}).items()
+        if isinstance(v, (int, float)) and v > 0
+    }
+    if not shares and not override:
+        return jsonify({'error': 'No holdings provided'}), 400
+
+    try:
+        method = str(body.get('method', 'normal'))
+        options = dict(
+            horizon_days=_int_opt(body, 'horizon_days', montecarlo.TRADING_DAYS),
+            n_paths=_int_opt(body, 'paths', montecarlo.DEFAULT_PATHS),
+            method=method,
+            lookback_days=_int_opt(body, 'lookback_days', None),
+            seed=_int_opt(body, 'seed', None),
+            block=_int_opt(body, 'block', 1),
+        )
+        if 'df' in body:
+            options['df'] = float(body['df'])
+    except (montecarlo.SimulationError, TypeError, ValueError) as e:
+        return jsonify({'error': str(e)}), 400
+
+    md = MarketData(list(dict.fromkeys(list(shares) + list(override))), period='5y')
+    if not md.valid:
+        return jsonify({'error': 'Could not fetch price data for any of these tickers.'}), 400
+
+    total_value = 0.0
+    if shares:
+        prices, purchase = portfolio.resolve_prices(md, shares, purchase_prices)
+        book = portfolio.calculate(shares, prices, purchase)
+        total_value = book['total_value']
+        weights = portfolio.weights_from(book)
+    if override:
+        weights = override
+
+    try:
+        result = montecarlo.analyse(md, weights, total_value, **options)
+    except montecarlo.SimulationError as e:
+        return jsonify({'error': str(e)}), 400
+
+    result['meta'] = {
+        'dropped_tickers': md.dropped,
+        'elapsed_ms': int((time.time() - started) * 1000),
+        'fetches': counters(),
+    }
+    return jsonify(_sanitize(result))
 
 
 # ── entry ────────────────────────────────────────────────────────────────────
