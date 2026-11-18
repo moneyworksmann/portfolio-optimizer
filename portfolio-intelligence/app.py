@@ -15,6 +15,10 @@ Routes
   POST /api/simulate          holdings + options -> Monte Carlo return distribution
   POST /api/sensitivity/model     holdings -> factor betas for the stress test
   POST /api/sensitivity/simulate  model + slider settings -> scenario + Monte Carlo
+  GET  /api/portfolio         the saved ("watched") portfolio          (owner key)
+  POST /api/portfolio         save holdings + watchlist for the news loop (owner key)
+  GET  /api/intel             news signals, scored items, suggestions   (owner key)
+  POST /api/intel/run         one pass of the news loop; the scheduler calls this (owner key)
 
 One POST /api/analyze builds a single MarketData object and passes it to the
 valuation, optimizer and PRISM layers in turn. Before the merge this was two
@@ -22,6 +26,7 @@ services on two stacks (Flask + FastAPI) that each did their own downloads and
 each derived their own weights.
 """
 
+import hmac
 import math
 import os
 import time
@@ -29,7 +34,7 @@ import time
 import numpy as np
 from flask import Flask, jsonify, render_template, request
 
-from core import hindsight, ingest, montecarlo, optimizer, portfolio, prism, sensitivity
+from core import hindsight, ingest, intel, montecarlo, optimizer, portfolio, prism, sensitivity, store
 from core.market_data import MarketData, counters, lookup_sectors, reset_counters
 
 app = Flask(__name__)
@@ -52,6 +57,85 @@ def stress_page():
 @app.route('/api/health')
 def health():
     return jsonify({'status': 'ok'})
+
+
+# ── saved portfolio + news loop (owner only) ─────────────────────────────────
+
+_LOOPBACK = {'127.0.0.1', '::1', 'localhost'}
+
+
+def _is_owner() -> bool:
+    """Bearer INTEL_TOKEN, or — when no token is configured — a request from this
+    machine (./run.sh on your Mac). On Vercel without a token, nobody gets in."""
+    token = os.environ.get('INTEL_TOKEN', '').strip()
+    header = request.headers.get('Authorization', '')
+    if token:
+        given = header[7:].strip() if header.startswith('Bearer ') else ''
+        return bool(given) and hmac.compare_digest(given.encode(), token.encode())
+    if os.environ.get('VERCEL'):
+        return False
+    return request.remote_addr in _LOOPBACK and not request.headers.get('X-Forwarded-For')
+
+
+def _owner_only():
+    if _is_owner():
+        return None
+    msg = ('Owner key required.' if os.environ.get('INTEL_TOKEN')
+           else 'Set INTEL_TOKEN on the server to use this from outside your own computer.')
+    return jsonify({'error': msg, 'needs_key': True}), 401
+
+
+@app.route('/api/portfolio', methods=['GET'])
+def get_portfolio():
+    if (denied := _owner_only()):
+        return denied
+    saved = store.get('portfolio')
+    if not saved:
+        return jsonify({'error': 'No saved portfolio yet.'}), 404
+    return jsonify(saved)
+
+
+@app.route('/api/portfolio', methods=['POST'])
+def save_portfolio():
+    if (denied := _owner_only()):
+        return denied
+    body = request.get_json(force=True, silent=True) or {}
+    lots = ingest.clean_lots(body.get('holdings', []))
+    lots = [l for l in lots if l.get('ticker') and (l.get('shares') or 0) > 0]
+    if not lots:
+        return jsonify({'error': 'No holdings to save.'}), 400
+    held = {l['ticker'] for l in lots}
+    candidates = list(dict.fromkeys(
+        str(c).upper().strip() for c in body.get('candidates', []) or []
+        if str(c).strip() and str(c).upper().strip() not in held
+    ))[:30]
+    saved = {'saved_at': store.now_iso(), 'holdings': lots, 'candidates': candidates}
+    try:
+        store.put('portfolio', saved)
+    except store.StoreUnavailable as e:
+        return jsonify({'error': str(e)}), 503
+    return jsonify({'ok': True, 'saved_at': saved['saved_at'],
+                    'holdings': len(lots), 'tickers': len(held), 'candidates': candidates})
+
+
+@app.route('/api/intel', methods=['GET'])
+def intel_view():
+    if (denied := _owner_only()):
+        return denied
+    return jsonify(_sanitize(intel.view()))
+
+
+@app.route('/api/intel/run', methods=['POST'])
+def intel_run():
+    if (denied := _owner_only()):
+        return denied
+    started = time.time()
+    try:
+        summary = intel.run()
+    except store.StoreUnavailable as e:
+        return jsonify({'ok': False, 'error': str(e)}), 503
+    summary['elapsed_ms'] = int((time.time() - started) * 1000)
+    return jsonify(_sanitize(summary)), (200 if summary.get('ok') else 409)
 
 
 

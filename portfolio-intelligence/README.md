@@ -226,6 +226,51 @@ holdings with a review warning.
 
 **`GET /api/health`** — liveness probe.
 
+### News signals (watched portfolio)
+
+Portfolio Intelligence can remember one portfolio and keep reading the news for
+it. Only the tickers in that saved portfolio (plus its watchlist candidates) are
+ever looked up. Nothing here places trades.
+
+- **`POST /api/portfolio`** — `{"holdings": [...], "candidates": ["TICKER", ...]}`.
+  Saves the portfolio the dashboard is showing ("Watch this portfolio").
+  **`GET /api/portfolio`** returns it (404 if none is saved).
+- **`POST /api/intel/run`** — one pass of the loop: fetch news and filings since
+  the last run, have Claude score each new story (event type, direction,
+  magnitude, a quote it must take from the story), decay scores over time
+  (half-life 4 days for news, 7 for filings), check them against today's price
+  move, and, if a stock's signal is strong enough, build a suggestion with the
+  optimizer, capped at a 5-point move per stock, with PRISM and Monte Carlo
+  before and after. Returns 409 if no portfolio is saved. If every news source fails, the run is
+  recorded with its errors and no suggestion is made.
+- **`GET /api/intel`** — the current signals, recent suggestions and runs, and
+  which settings are missing (true/false only, never the values).
+
+These three need the owner key: `Authorization: Bearer $INTEL_TOKEN`. The page
+asks for it once and keeps it in the browser. Without `INTEL_TOKEN`, only
+requests from the same machine are allowed, and on Vercel nobody is.
+
+The schedule is `.github/workflows/intel.yml`: every 30 minutes while the US
+market is open, plus one run before the open and one after the close. It calls
+`/api/intel/run` and needs two repository secrets, `INTEL_URL` (for example
+`https://portfolio-intelligence-chi.vercel.app`) and `INTEL_TOKEN`. It skips
+quietly until both are set.
+
+| Setting | What it does |
+|---|---|
+| `INTEL_TOKEN` | Owner key for the routes above. Generate a long random string. |
+| `ANTHROPIC_API_KEY` | Claude scoring. Without it, stories are collected but not scored. |
+| `INTEL_MODEL` | Optional; defaults to the current Claude Opus model. |
+| `FINNHUB_API_KEY` | Primary news feed (free tier is enough). Google News is used without it. |
+| `SEC_USER_AGENT` | `"portfolio-intelligence you@example.com"`; the SEC requires a contact. Filings are skipped without it. |
+| `DATABASE_URL` / `POSTGRES_URL` | Where the saved portfolio and loop state live. Required on Vercel (Storage → Neon sets it). Locally, JSON files under `PI_DATA_DIR` (default `.data/`) are used. |
+| `INTEL_MODE` | `shadow` (default): suggestions are recorded and shown, marked as not acted on. `live`: also sends a push. |
+| `NTFY_TOPIC` | ntfy.sh topic for pushes in live mode. |
+
+Guard rails: at most 3 suggestions a day, a 4-day cooldown per stock and
+direction, no trade under 2% of the portfolio, and a suggestion is dropped if
+it lowers the PRISM score by more than 5 points.
+
 ---
 
 ## Running

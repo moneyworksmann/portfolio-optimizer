@@ -204,7 +204,7 @@ function buildStory(d) {
   window._data = d;
   const chapters = [
     chToday(d), chJourney(d), chPositions(d), chPeaks(d), chAllocation(d),
-    chYear(d), chRisk(d), chOutcomes(d), chStress(d), chSuggest(d), chTable(d),
+    chYear(d), chRisk(d), chOutcomes(d), chStress(d), chSignals(d), chSuggest(d), chTable(d),
   ].filter(Boolean);
 
   $('story').innerHTML = chapters.map((c, i) => `
@@ -609,6 +609,137 @@ function saveForStress(d) {
     const rows = d.holdings.filter((h) => !dropped.includes(h.ticker)).map((h) => ({ ticker: h.ticker, shares: h.shares, sector: h.sector, price: h.current_price }));
     localStorage.setItem('pi_portfolio', JSON.stringify({ saved: new Date().toISOString(), holdings: rows }));
   } catch (e) { /* storage blocked: the stress page lets you type holdings instead */ }
+}
+
+// ── News signals: the always-on loop on your saved portfolio ─────
+// The owner key is the server's INTEL_TOKEN; it stays in this browser only.
+function ownerKey() { try { return localStorage.getItem('pi_owner_key') || ''; } catch (e) { return ''; } }
+function setOwnerKey(k) { try { k ? localStorage.setItem('pi_owner_key', k) : localStorage.removeItem('pi_owner_key'); } catch (e) { /* storage blocked */ } }
+
+async function intelFetch(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  const key = ownerKey();
+  if (key) headers.Authorization = 'Bearer ' + key;
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(path, { ...opts, headers });
+  let data = {};
+  try { data = await res.json(); } catch (e) { data = { error: `Server answered ${res.status}` }; }
+  return { status: res.status, data };
+}
+
+function chSignals(d) {
+  if (!d.holdings?.length) return null;
+  return {
+    id: 'signals', rail: 'News signals', title: 'What the news is saying',
+    what: 'Save this portfolio and Portfolio Intelligence keeps reading the news and SEC filings for these stocks, every 30 minutes while the market is open. Claude scores each new story, scores fade over a few days, and only a strong, lasting signal can turn into a suggested trade.',
+    how: [
+      'Each stock gets a score: below zero is bad news, above zero good news. Under ±2 is noise, ±2 to ±4 is worth watching, ±4 or more can trigger a suggestion.',
+      'A suggestion moves a stock by at most 5 points of your portfolio, and the rest are scaled to make room.',
+      'It only looks at the stocks you save here, plus the watchlist below.',
+    ],
+    takeaway: ['For the first two weeks it runs in <b>shadow mode</b>: it shows what it <i>would</i> suggest, so you can judge it before trusting it. It never places trades.'],
+    caveat: 'Scores come from headlines and summaries, not full articles. Not financial advice.',
+    visual: `<div class="panel" id="intel-panel">
+        <div class="intel-head">
+          <div><h3>Watch this portfolio</h3><p class="hint" id="intel-saved">Not saved yet.</p></div>
+          <div class="intel-actions">
+            <button class="btn btn-primary" id="btn-watch">Watch this portfolio</button>
+            <button class="btn" id="btn-intel-run" title="Run the news check now instead of waiting for the schedule">Check the news now</button>
+          </div>
+        </div>
+        <div id="intel-key" class="intel-key" style="display:none">
+          <p class="hint">This server needs your owner key (the <code>INTEL_TOKEN</code> you set in Vercel). It is kept in this browser only.</p>
+          <div class="candidate-row"><input type="password" id="intel-key-input" placeholder="Owner key" autocomplete="off" /><button class="btn btn-primary" id="btn-intel-key">Save key</button></div>
+        </div>
+        <div id="intel-msg" class="msg" style="display:none"></div>
+        <div id="intel-body"><p class="sub">Loading signals…</p></div>
+      </div>`,
+    draw: () => {
+      $('btn-watch').onclick = watchPortfolio;
+      $('btn-intel-run').onclick = runIntelNow;
+      $('btn-intel-key').onclick = () => { setOwnerKey($('intel-key-input').value.trim()); $('intel-key').style.display = 'none'; loadIntel(); };
+      loadIntel();
+    },
+  };
+}
+
+function intelError(status, data) {
+  if (status === 401 && data.needs_key) { $('intel-key').style.display = 'block'; }
+  showMsg('intel-msg', data.error || `Something went wrong (${status}).`);
+}
+
+async function watchPortfolio() {
+  clearMsg('intel-msg');
+  const valid = holdings.filter((h) => h.ticker && +h.shares > 0);
+  $('btn-watch').disabled = true;
+  try {
+    const { status, data } = await intelFetch('/api/portfolio', { method: 'POST', body: JSON.stringify({ holdings: valid, candidates: candidateTickers }) });
+    if (status !== 200) return intelError(status, data);
+    showMsg('intel-msg', `Saved ${data.tickers} stocks${data.candidates.length ? ` and ${data.candidates.length} on the watchlist` : ''}. The news check will use exactly these.`, 'info');
+    loadIntel();
+  } finally { $('btn-watch').disabled = false; }
+}
+
+async function runIntelNow() {
+  clearMsg('intel-msg');
+  const btn = $('btn-intel-run');
+  btn.disabled = true; btn.textContent = 'Checking…';
+  try {
+    const { status, data } = await intelFetch('/api/intel/run', { method: 'POST' });
+    if (status !== 200) return intelError(status, data);
+    const bits = [`${data.new_items} new stories, ${data.scored} scored`];
+    if (data.deferred) bits.push(`${data.deferred} left for the next run`);
+    if (data.errors?.length) bits.push(data.errors.join(' · '));
+    showMsg('intel-msg', bits.join('. ') + '.', data.errors?.length ? 'error' : 'info');
+    loadIntel();
+  } finally { btn.disabled = false; btn.textContent = 'Check the news now'; }
+}
+
+const LEVEL = {
+  candidate: ['pill-exit', 'Could act'], disagree: ['pill-trim', 'News vs price'],
+  watch: ['pill-trim', 'Watch'], none: ['pill-keep', 'Quiet'],
+};
+
+async function loadIntel() {
+  const { status, data } = await intelFetch('/api/intel');
+  if (status !== 200) { $('intel-body').innerHTML = ''; return intelError(status, data); }
+  const cfg = data.config;
+  $('intel-saved').innerHTML = data.portfolio
+    ? `Watching ${data.portfolio.tickers.length} stocks, saved ${fmtWhen(data.portfolio.saved_at)}. Last news check: ${data.last_run ? fmtWhen(data.last_run) : 'not yet'}. Mode: <b>${cfg.mode === 'live' ? 'live' : 'shadow'}</b>.`
+    : 'Not saved yet. Save it to start the news checks on these stocks.';
+  const missing = [];
+  if (!cfg.claude) missing.push('ANTHROPIC_API_KEY (scoring)');
+  if (!cfg.finnhub) missing.push('FINNHUB_API_KEY (news; Google News is used meanwhile)');
+  if (!cfg.sec_user_agent) missing.push('SEC_USER_AGENT (filings)');
+  if (cfg.store === 'none') missing.push('a Postgres database (saving)');
+
+  const sig = Object.entries(data.signals || {}).sort((a, b) => Math.abs(b[1].score) - Math.abs(a[1].score));
+  const sug = (data.suggestions || [])[0];
+  $('intel-body').innerHTML = `
+    ${missing.length ? `<p class="hint">Not set up on the server yet: ${missing.map(esc).join(', ')}.</p>` : ''}
+    ${sug ? suggestionHtml(sug) : ''}
+    ${sig.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Stock</th><th class="num">Score</th><th>Signal</th><th class="num">Stories</th><th class="num">Today</th><th>Biggest story</th></tr></thead><tbody>
+      ${sig.map(([t, s]) => { const [cls, label] = LEVEL[s.level] || LEVEL.none; const top = s.top?.[0];
+        return `<tr><td><b>${esc(t)}</b>${s.watchlist ? ' <span class="sub">watchlist</span>' : ''}</td><td class="num ${s.score > 0 ? 'up' : s.score < 0 ? 'down' : ''}">${s.score > 0 ? '+' : ''}${s.score.toFixed(1)}</td><td><span class="pill ${cls}">${label}</span></td><td class="num">${s.items}</td><td class="num">${s.day_move_pct == null ? '—' : pct(s.day_move_pct)}</td><td class="why">${top ? `${esc(top.reason)} <a href="${esc(top.url)}" target="_blank" rel="noopener">${esc(top.source || 'source')}</a>` : '<span class="sub">No scored stories</span>'}</td></tr>`; }).join('')}
+      </tbody></table></div>` : (data.portfolio ? '<p class="sub">No signals yet. They appear after the first news check.</p>' : '')}`;
+}
+
+function suggestionHtml(s) {
+  const shadow = s.mode !== 'live';
+  const o = s.outcomes_1y_pct;
+  return `<div class="intel-sug${shadow ? ' shadow' : ''}">
+    <h3>${shadow ? 'Shadow suggestion (not acted on)' : 'News-driven suggestion'} · ${fmtWhen(s.created)}</h3>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Stock</th><th>Action</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">$ amount</th><th class="num">Shares</th><th>Why</th></tr></thead><tbody>
+    ${s.trades.map((t) => `<tr><td><b>${esc(t.ticker)}</b></td><td><span class="pill pill-${t.action === 'Add' ? 'add' : t.action === 'Trim' ? 'trim' : 'keep'}">${t.action}</span></td><td class="num">${t.current_pct.toFixed(1)}%</td><td class="num">${t.target_pct.toFixed(1)}%</td><td class="num">${signUsd(t.dollars)}</td><td class="num">${t.shares == null ? '—' : (t.shares >= 0 ? '+' : '') + t.shares.toFixed(2)}</td><td class="why">${esc(t.reason || '')}${t.source?.url ? ` <a href="${esc(t.source.url)}" target="_blank" rel="noopener">${esc(t.source.source || 'source')}</a>` : ''}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="hint">Sharpe ${s.sharpe_before.toFixed(2)} → ${s.sharpe_after.toFixed(2)}${s.prism_before != null ? ` · PRISM ${s.prism_before} → ${s.prism_after}` : ''}${o ? ` · 1-year range (5th / median / 95th): ${pct(o.current.p5)} / ${pct(o.current.p50)} / ${pct(o.current.p95)} now, ${pct(o.suggested.p5)} / ${pct(o.suggested.p50)} / ${pct(o.suggested.p95)} after` : ''}. ${esc(s.note || '')}</p>
+  </div>`;
+}
+
+function fmtWhen(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 // ── Chapter 8: suggested changes (its own dashboard) ─────────────
