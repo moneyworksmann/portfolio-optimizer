@@ -275,3 +275,69 @@ def analyse(md, current_weights: dict, total_value: float = 0.0) -> dict:
         'scatter': scatter,
         'max_position_pct': round(max(MAX_POSITION, 1.0 / len(tickers)) * 100, 1),
     }
+
+
+# ── news-driven rebalance (used by core/intel.py) ───────────────────────────
+
+def tilted_rebalance(mean_returns, cov_matrix, current_weights: dict, tilts: dict,
+                     max_move: float = 0.05) -> dict:
+    """Re-solve for max Sharpe after nudging some holdings' expected returns.
+
+    tilts           {ticker: annual expected-return shift}, e.g. {'NVDA': -0.04}.
+                    Only these tickers ("candidates") get their own variable.
+    max_move        the most any candidate's weight may move, as a fraction of the
+                    portfolio (0.05 = 5 percentage points).
+
+    Every other holding keeps its share of the remainder: if candidates take
+    3 points more, the rest shrink pro rata to make room. That keeps a
+    news-driven suggestion small and about the stocks in the news, instead of a
+    full reshuffle toward the historical max-Sharpe mix.
+
+    Returns {ticker: new weight} over the same tickers as current_weights.
+    """
+    tickers = [t for t in current_weights if current_weights[t] > 0]
+    total = sum(current_weights[t] for t in tickers)
+    if not tickers or total <= 0:
+        return dict(current_weights)
+    cur = np.array([current_weights[t] / total for t in tickers])
+
+    cands = [i for i, t in enumerate(tickers) if t in tilts and tilts[t]]
+    others = [i for i in range(len(tickers)) if i not in cands]
+    if not cands:
+        return {t: float(w) for t, w in zip(tickers, cur)}
+
+    mu = np.array([float(mean_returns.get(t, 0.0)) for t in tickers]) * TRADING_DAYS
+    mu = mu + np.array([float(tilts.get(t, 0.0) or 0.0) for t in tickers])
+    cov = cov_matrix.reindex(index=tickers, columns=tickers).fillna(0.0).values * TRADING_DAYS
+
+    other_share = cur[others] / cur[others].sum() if others and cur[others].sum() > 0 else None
+    cap = max(MAX_POSITION, 1.0 / len(tickers))
+
+    def assemble(x):
+        w = np.zeros(len(tickers))
+        w[cands] = x
+        if others:
+            rest = max(0.0, 1.0 - float(np.sum(x)))
+            w[others] = rest * other_share if other_share is not None else rest / len(others)
+        return w
+
+    def neg_sharpe(x):
+        w = assemble(x)
+        risk = np.sqrt(max(w @ cov @ w, 0.0))
+        return -(float(mu @ w) / risk) if risk > 1e-9 else 0.0
+
+    bounds = []
+    for i in cands:
+        lo = max(0.0, cur[i] - max_move)
+        hi = min(max(cap, cur[i]), cur[i] + max_move)
+        bounds.append((lo, hi))
+    cons = [] if others else [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
+    if others:
+        cons.append({'type': 'ineq', 'fun': lambda x: 1.0 - np.sum(x)})
+
+    result = minimize(neg_sharpe, x0=cur[cands], method='SLSQP', bounds=bounds, constraints=cons)
+    x = result.x if result.success else cur[cands]
+    x = np.clip(x, [b[0] for b in bounds], [b[1] for b in bounds])
+    w = assemble(x)
+    w = w / w.sum() if w.sum() > 0 else cur
+    return {t: float(v) for t, v in zip(tickers, w)}

@@ -1,0 +1,35 @@
+# Runs Portfolio Intelligence's news loop on your saved portfolio.
+# Vercel has no always-on scheduler, so GitHub Actions calls the app instead.
+# Each run is one small HTTP request (well under a minute of Actions time).
+#
+# Needs two repository secrets (Settings -> Secrets and variables -> Actions):
+#   INTEL_URL    the app's address, e.g. https://portfolio-intelligence-chi.vercel.app
+#   INTEL_TOKEN  the same INTEL_TOKEN set in the Vercel project's environment variables
+# Until both exist, the job does nothing.
+name: News signals
+
+on:
+  schedule:
+    - cron: "0 12 * * 1-5"         # pre-market, 8:00 New York (EDT); 7:00 in winter
+    - cron: "*/30 13-20 * * 1-5"   # every 30 min, 9:00-16:30 New York (EDT)
+    - cron: "30 21 * * 1-5"        # after the close
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Run the news check
+        env:
+          INTEL_URL: ${{ secrets.INTEL_URL }}
+          INTEL_TOKEN: ${{ secrets.INTEL_TOKEN }}
+        run: |
+          if [ -z "$INTEL_URL" ] || [ -z "$INTEL_TOKEN" ]; then
+            echo "::notice::INTEL_URL / INTEL_TOKEN secrets not set yet; skipping."; exit 0
+          fi
+          code=$(curl -sS -o out.json -w '%{http_code}' --max-time 300 -X POST \
+            -H "Authorization: Bearer $INTEL_TOKEN" "${INTEL_URL%/}/api/intel/run")
+          cat out.json; echo
+          # 409 = no saved portfolio yet: not a failure of the job.
+          if [ "$code" != "200" ] && [ "$code" != "409" ]; then exit 1; fi
