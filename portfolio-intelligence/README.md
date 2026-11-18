@@ -71,7 +71,7 @@ you arrive, the side rail tracks where you are, and the rest dims so there is on
 | The last 12 months | Current holdings vs SPY over a year |
 | Risk health | PRISM score, its four parts, and the correlation grid |
 | Range of outcomes | Monte Carlo replays of the next 12 months for your holdings: middle case, chance of a down year, 1-in-20 loss in dollars, fan chart, histogram, and your mix vs the suggested mix |
-| Stress test | Live sliders for the stock market, 10-year yield, yield-curve slope, VIX, oil, the dollar and per-sector shocks, plus Monte Carlo settings (horizon, market return, volatility, target, fat tails). Shows the instant hit, which factor drives it, each holding's sensitivity, and a Monte Carlo fan chart and outcome histogram with and without the shock. Shares are editable in place |
+| Stress test | A link to the stress test page (`/stress`), which opens with your holdings carried over |
 | Suggested changes | Its own dashboard: the trades (add / trim / exit, in % , $ and shares) that turn today’s mix into the max-Sharpe mix, expected return and $/year before and after, risk and Sharpe change, and a year replayed with both mixes |
 | Every holding | The full table per purchase |
 
@@ -194,6 +194,12 @@ shared fat-tailed shock, so crashes hit all holdings at once. `bootstrap`
 replays whole historical days (in blocks of `block` days if set), keeping the
 real tails and correlations with no distributional assumption. Paths are
 buy-and-hold, so winners drift to a larger share over the horizon.
+**`GET /stress`** — the stress test page. Holdings arrive from the story page through `localStorage`
+(or can be typed in). Step 1 checks the holdings, step 2 offers ready-made scenarios and sliders for the stock
+market, the 10-year yield, the yield-curve gap, VIX, oil, the dollar and each sector you own, each with a
+one-line explanation, and step 3 shows the instant hit per holding, what drives it, your biggest sensitivities,
+a Monte Carlo fan chart and an outcome histogram, plus a plain-words summary and a glossary.
+
 **`POST /api/sensitivity/model`** — `{"holdings": [{"ticker", "sector"?}]}`. One 5-year weekly download of
 the holdings plus SPY, ^TNX, ^IRX, ^VIX, USO and UUP, then a ridge-stabilised regression of each holding on
 those factors (market return, change in the 10-year yield in bp, change in the 10y − 3m slope in bp, change in

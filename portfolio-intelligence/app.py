@@ -4,6 +4,7 @@ Portfolio Intelligence Platform — Flask server.
 
 Routes
   GET  /                      dashboard UI
+  GET  /stress                stress test page (sliders + Monte Carlo)
   GET  /api/health            liveness probe
   POST /api/parse             files (csv/xlsx/ods/json/pdf/docx/images) and/or a
                               Google Sheets link -> holdings with acquisition dates
@@ -40,6 +41,12 @@ app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/stress')
+def stress_page():
+    """Stress test: live sensitivity sliders + Monte Carlo, on its own page."""
+    return render_template('stress.html')
 
 
 @app.route('/api/health')

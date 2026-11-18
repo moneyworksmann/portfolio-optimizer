@@ -153,3 +153,11 @@ def test_flask_routes(model, monkeypatch):
     assert r['available'] and r['scenario']['change'] < 0
     bad = c.post('/api/sensitivity/simulate', json={'model': {}, 'values': {}})
     assert bad.status_code == 400
+
+
+def test_stress_page_and_link():
+    import app as appmod
+    c = appmod.app.test_client()
+    page = c.get('/stress')
+    assert page.status_code == 200 and b'stress.js' in page.data
+    assert b'href="/stress"' in c.get('/').data

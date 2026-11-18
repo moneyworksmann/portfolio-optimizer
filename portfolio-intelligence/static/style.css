@@ -239,3 +239,44 @@ input:focus { border-color: var(--leaf); box-shadow: 0 0 0 3px rgba(95, 163, 106
   .st-layout { grid-template-columns: 1fr; }
   .st-controls { position: static; max-height: none; }
 }
+
+/* ── stress test page ────────────────────────────────── */
+.topnav { display: flex; gap: 8px; align-items: center; }
+a.brand { text-decoration: none; }
+a.btn { text-decoration: none; }
+.st-cta { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.st-cta > div { flex: 1; min-width: 200px; }
+.st-cta-icon { font-size: 34px; }
+.sp-wrap { max-width: 1240px; margin: 0 auto; padding: 28px 20px 100px; display: grid; gap: 22px; }
+.sp-hero h1 { font-size: clamp(26px, 3.2vw, 36px); line-height: 1.15; font-weight: 800; letter-spacing: -.02em; margin: 6px 0 10px; }
+.sp-hero .lead { color: var(--ink2); max-width: 780px; font-size: 16px; }
+.sp-hero .step { font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--leaf); }
+.sp-steps { list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; counter-reset: s; }
+.sp-steps li { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 12px 14px; counter-increment: s; font-size: 14px; }
+.sp-steps li::before { content: counter(s); display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--mint); color: var(--forest); font-weight: 800; font-size: 12px; margin-right: 8px; }
+.sp-steps li span { display: block; color: var(--ink2); font-size: 13px; margin-top: 4px; }
+.sp-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.sp-head > div { display: flex; align-items: center; gap: 10px; }
+.sp-head h2 { font-size: 20px; font-weight: 800; }
+.sp-num { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--forest); color: #fff; font-weight: 800; font-size: 14px; }
+.sp-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.sp-section .msg { margin-top: 12px; }
+#sp-dash { display: grid; gap: 16px; }
+.sp-read { margin-top: 10px; font-size: 13px; color: var(--ink2); background: var(--bg2); border-radius: var(--r-sm); padding: 8px 12px; }
+.st-help { font-size: 12.5px; color: var(--soft); font-weight: 600; line-height: 1.4; margin-top: 2px; }
+.st-scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--soft); margin-top: -2px; }
+.st-sec { margin-top: 20px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.st-check { align-items: flex-start; }
+.st-check input { margin-top: 4px; }
+body.st-busy .st-out { opacity: .72; }
+.sp-glossary summary { cursor: pointer; }
+.sp-glossary dl { display: grid; grid-template-columns: 170px 1fr; gap: 6px 14px; margin: 12px 0; font-size: 14px; }
+.sp-glossary dt { font-weight: 800; }
+.sp-glossary dd { color: var(--ink2); }
+@media (max-width: 720px) {
+  .sp-steps { grid-template-columns: 1fr; }
+  .sp-glossary dl { grid-template-columns: 1fr; }
+  .topnav .btn { padding: 8px 10px; font-size: 13px; }
+}
+#sp-tbl { max-width: 460px; }
+#st-rows input { width: 76px !important; }

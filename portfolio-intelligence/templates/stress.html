@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stress Test · Portfolio Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="stress-page">
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/"><span class="leaf">🌱</span> Portfolio Intelligence</a>
+    <nav class="topnav">
+      <a class="btn btn-ghost" href="/">← Back to my portfolio story</a>
+    </nav>
+  </div>
+</header>
+
+<main class="sp-wrap">
+
+  <section class="sp-hero">
+    <span class="step">Stress test</span>
+    <h1>What happens to my money if the world changes?</h1>
+    <p class="lead">Pick a scenario or move a slider, such as “interest rates up 2%” or “oil doubles”. You’ll see right away what your portfolio would be worth, which holdings would be hit, and the range of where it could be in a year or more.</p>
+    <ol class="sp-steps">
+      <li><b>Check your holdings</b><span>We carry them over from your portfolio story, or you can type them in.</span></li>
+      <li><b>Pick a scenario or move the sliders</b><span>Every change updates the results within a second.</span></li>
+      <li><b>Read the results</b><span>Each chart says in one line what it shows.</span></li>
+    </ol>
+  </section>
+
+  <!-- 1. Holdings -->
+  <section class="panel sp-section" id="sp-holdings">
+    <div class="sp-head">
+      <div><span class="sp-num">1</span><h2>Your holdings</h2></div>
+      <p class="hint" id="sp-source"></p>
+    </div>
+    <div class="tbl-wrap"><table class="tbl" id="sp-tbl">
+      <thead><tr><th>Ticker</th><th class="num">Shares</th><th></th></tr></thead>
+      <tbody id="sp-rows"></tbody>
+    </table></div>
+    <div class="sp-actions">
+      <button class="btn" id="sp-add">+ Add a holding</button>
+      <button class="btn btn-primary" id="sp-go">Run the stress test →</button>
+    </div>
+    <div id="sp-load-msg" class="msg" style="display:none"></div>
+    <div id="sp-loading" class="loading-wrap" style="display:none"><div class="spinner"></div><p>Measuring how each holding has reacted to rates, oil, the dollar and the market over 5 years…</p><p class="sub">This takes a few seconds once. After that, the sliders are instant.</p></div>
+  </section>
+
+  <div id="sp-dash" style="display:none">
+
+    <!-- 2. Scenario -->
+    <section class="sp-section">
+      <div class="sp-head"><div><span class="sp-num">2</span><h2>Pick a scenario, then fine-tune</h2></div>
+        <p class="hint">Scenarios are examples to start from, not forecasts.</p></div>
+      <div class="st-presets" id="sp-presets"></div>
+    </section>
+
+    <div class="st-layout">
+      <aside class="panel st-controls" id="sp-controls"></aside>
+
+      <!-- 3. Results -->
+      <div class="st-out">
+        <div class="sp-head"><div><span class="sp-num">3</span><h2>What it means for your portfolio</h2></div></div>
+        <div class="grid g4" id="st-kpis"></div>
+        <div class="takeaway st-say" id="st-say"><div class="label">🌿 In plain words</div><p>…</p></div>
+
+        <div class="panel">
+          <h3>Which holdings get hit, and by how much</h3>
+          <p class="hint">The instant effect of your scenario on each holding. Change <b>Shares</b> to try a different mix.</p>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Shares</th><th class="num">Value now</th><th class="num">Change</th><th class="num">$ change</th><th class="num" title="How much it moves when the S&P 500 moves 1%">Vs market</th><th class="num" title="Change in value if the 10-year Treasury yield rises by 1 percentage point">Rates +1%</th></tr></thead><tbody id="st-rows"></tbody></table></div>
+          <p class="sp-read"><b>Vs market</b> of 1.5× means it has tended to rise or fall 1.5% for every 1% the S&P 500 moves. <b>Rates +1%</b> is its change if the 10-year Treasury yield rose by one percentage point.</p>
+        </div>
+
+        <div class="grid g2">
+          <div class="panel"><h3>What’s driving the change</h3><p class="hint">Dollar effect of each slider on your portfolio</p><div class="chart-box short"><canvas id="c-st-contrib"></canvas></div>
+            <p class="sp-read">Longer bars matter more. Grey italic slider values on the left were filled in for you (see “Move the others too”).</p></div>
+          <div class="panel"><h3>What you’re most sensitive to</h3><p class="hint">Your portfolio’s change for a typical one-year move in each factor</p><div class="chart-box short"><canvas id="c-st-tornado"></canvas></div>
+            <p class="sp-read">Green is the factor going up, red is it going down. The widest row is your biggest exposure.</p></div>
+        </div>
+
+        <div class="panel"><h3>Where your portfolio could be over time</h3><p class="hint" id="st-fan-hint"></p><div class="chart-box"><canvas id="c-st-fan"></canvas></div>
+          <p class="sp-read">We simulated thousands of possible futures. The dark line is the middle one. The darker band holds the middle half of futures and the light band holds 9 in 10. The dashed line is the middle future with no scenario applied.</p></div>
+
+        <div class="panel"><h3>Where you could end up</h3><p class="hint" id="st-hist-hint">Share of simulated futures ending at each value</p><div class="chart-box short"><canvas id="c-st-hist"></canvas></div>
+          <p class="sp-read">Each bar is a range of end values. Red bars end below what you have today, green bars end above. Taller bars are more likely.</p></div>
+
+        <details class="panel sp-glossary">
+          <summary><b>Words used on this page</b></summary>
+          <dl>
+            <dt>bp (basis point)</dt><dd>One hundredth of a percentage point. 100 bp = 1%. “Rates +250 bp” means the 10-year yield goes from, say, 4.2% to 6.7%.</dd>
+            <dt>Yield curve gap</dt><dd>The 10-year Treasury yield minus the 3-month bill yield. When it’s negative (“inverted”), recessions have often followed.</dd>
+            <dt>VIX</dt><dd>The market’s “fear gauge”, based on options prices. Around 15 is calm; above 30 is stress; it hit 80 in March 2020.</dd>
+            <dt>Monte Carlo</dt><dd>Running thousands of random but realistic futures and counting how often each outcome happens, instead of making one prediction.</dd>
+            <dt>Fat tails</dt><dd>Allowing rare, big crashes to happen more often than a simple bell curve would. Closer to real markets.</dd>
+            <dt>1-in-20 bad case</dt><dd>Only 5% of simulated futures end lower than this.</dd>
+          </dl>
+          <p class="sub">How it works: each holding’s sensitivity to the six factors is measured from 5 years of weekly prices. The future is simulated with the same Monte Carlo engine as the “Range of outcomes” view in your portfolio story. Past relationships can change. Not financial advice.</p>
+        </details>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="{{ url_for('static', filename='stress.js') }}"></script>
+</body>
+</html>
