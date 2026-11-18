@@ -203,7 +203,7 @@ function buildStory(d) {
   window._data = d;
   const chapters = [
     chToday(d), chJourney(d), chPositions(d), chPeaks(d), chAllocation(d),
-    chYear(d), chRisk(d), chOutcomes(d), chSuggest(d), chTable(d),
+    chYear(d), chRisk(d), chOutcomes(d), chStress(d), chSuggest(d), chTable(d),
   ].filter(Boolean);
 
   $('story').innerHTML = chapters.map((c, i) => `
@@ -588,6 +588,280 @@ function chOutcomes(d) {
       });
     },
   };
+}
+
+// ── Chapter: stress test (live sensitivity + Monte Carlo) ────────
+// The model (factor betas) is fetched once; every slider move after that
+// is a quick POST to /api/sensitivity/simulate, debounced, newest wins.
+const ST = { model: null, values: {}, shares: {}, prices: {}, shocks: {}, sectors: {}, timer: null, seq: 0, ctrl: null,
+  opts: { horizon_months: 12, market_return: 7, vol_mult: 1, target_return: 5, linked: true, fat_tails: true } };
+
+function chStress(d) {
+  const tickers = d.holdings.filter((h) => !(d.meta?.dropped_tickers || []).includes(h.ticker));
+  if (!tickers.length) return null;
+  return {
+    id: 'stress', rail: 'Stress test', title: 'What if the world moves? A live stress test', wide: true,
+    what: 'Move a slider and watch what happens to your portfolio. Each holding’s sensitivity to stocks, interest rates, the yield curve, fear (VIX), oil and the dollar is measured from five years of weekly prices. Below the instant hit, a Monte Carlo runs thousands of possible futures so you see a range of outcomes with odds, not one prediction.',
+    how: [
+      '<b>Shock sliders</b> are a sudden move today. <b>Let other factors respond</b> fills in the ones you leave at zero with how they usually move alongside (stocks falling usually means VIX rising).',
+      '<b>Sector shocks</b> hit only the holdings in that sector, on top of the factor moves.',
+      'The <b>fan chart</b> shows the middle 50% and 90% of simulated paths; the dashed line is the same simulation with no shock.',
+      'Change <b>shares</b> in the table to try a different mix without leaving this page.',
+    ],
+    caveat: 'Sensitivities come from the past five years and can change. Presets are illustrative, not forecasts. Not financial advice.',
+    visual: `<div id="st-root"><div class="loading-wrap"><div class="spinner"></div><p>Measuring how each holding reacts to rates, oil, the dollar and more…</p><p class="sub">One download, then the sliders are live</p></div></div>`,
+    draw: () => loadStress(d, tickers),
+  };
+}
+
+async function loadStress(d, rows) {
+  ST.values = {}; ST.shares = {}; ST.prices = {}; ST.shocks = {}; ST.sectors = {};
+  rows.forEach((h) => { ST.shares[h.ticker] = +h.shares; ST.prices[h.ticker] = +h.current_price; ST.values[h.ticker] = +h.value; });
+  try {
+    const res = await fetch('/api/sensitivity/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ holdings: rows.map((h) => ({ ticker: h.ticker, sector: h.sector })) }) });
+    const m = await res.json();
+    if (m.error || !m.available) throw new Error(m.error || m.reason);
+    ST.model = m;
+    m.assets.forEach((a) => { if (!ST.prices[a.ticker]) ST.prices[a.ticker] = a.price; });
+    renderStress();
+    runStress(0);
+  } catch (e) {
+    $('st-root').innerHTML = `<div class="msg">Couldn’t build the stress test: ${esc(e.message)}</div><p style="margin-top:10px"><button class="btn" id="st-retry">Try again</button></p>`;
+    $('st-retry').onclick = () => { $('st-root').innerHTML = '<div class="loading-wrap"><div class="spinner"></div><p>Trying again…</p></div>'; loadStress(d, rows); };
+  }
+}
+
+function fmtShock(f, v) {
+  const n = Math.abs(v) >= 10 || Number.isInteger(v) ? Math.round(v) : v.toFixed(1);
+  return (v > 0 ? '+' : v < 0 ? '−' : '') + String(n).replace('-', '') + (f.unit === '%' ? '%' : ' ' + f.unit);
+}
+
+function stSlider(id, label, min, max, step, val, sub) {
+  return `<div class="st-slider"><div class="st-lab"><span>${label}${sub ? `<span class="sub"> · ${sub}</span>` : ''}</span><b id="${id}-v"></b></div>
+    <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}" /></div>`;
+}
+
+function renderStress() {
+  const m = ST.model, o = ST.opts;
+  const sectors = [...new Set(m.assets.map((a) => a.sector))].sort();
+  const now = (f) => f.current == null ? '' : f.key === 'rates' ? `now ${f.current.toFixed(2)}%` : f.key === 'curve' ? `now ${Math.round(f.current)} bp` : f.key === 'vol' ? `now ${f.current.toFixed(1)}` : '';
+  $('st-root').innerHTML = `
+    <div class="st-presets"><span class="sub">Try a scenario:</span>
+      ${m.presets.map((p) => `<button class="btn st-preset" data-k="${p.key}">${esc(p.label)}</button>`).join('')}
+      <button class="btn btn-ghost" id="st-reset">Reset all</button></div>
+    <div class="st-layout">
+      <div class="panel st-controls">
+        <h3>Shock today</h3><p class="hint">A sudden move in each factor</p>
+        ${m.factors.map((f) => stSlider('st-f-' + f.key, esc(f.label), f.min, f.max, f.step, 0, now(f))).join('')}
+        <label class="st-check"><input type="checkbox" id="st-linked" ${o.linked ? 'checked' : ''}/> Let other factors respond</label>
+        <h3 style="margin-top:18px">Sector shocks</h3><p class="hint">Extra move for holdings in that sector</p>
+        ${sectors.map((s, i) => stSlider('st-s-' + i, esc(s), -50, 50, 1, 0)).join('')}
+        <h3 style="margin-top:18px">Monte Carlo</h3><p class="hint">How the future is simulated</p>
+        ${stSlider('st-h', 'Horizon', 1, 120, 1, o.horizon_months)}
+        ${stSlider('st-mr', 'Stock market return per year', -10, 15, 0.5, o.market_return, 'your assumption')}
+        ${stSlider('st-vm', 'Volatility', 0.5, 3, 0.1, o.vol_mult, 'vs the past 5 years')}
+        ${stSlider('st-tr', 'Target return per year', -5, 25, 0.5, o.target_return)}
+        <label class="st-check"><input type="checkbox" id="st-fat" ${o.fat_tails ? 'checked' : ''}/> Fat tails (crashes more likely than a bell curve says)</label>
+        <p class="sub" style="margin-top:12px">Measured ${fmtDate(m.window.start)} to ${fmtDate(m.window.end)}, ${m.window.weeks} weeks${m.skipped.length ? `. Not enough history for ${m.skipped.map(esc).join(', ')}, so left out.` : '.'}</p>
+      </div>
+      <div class="st-out">
+        <div class="grid g4" id="st-kpis"></div>
+        <div class="st-say takeaway" id="st-say"><div class="label">🌿 What it means for you</div><p>…</p></div>
+        <div class="panel"><h3>Range of outcomes over time</h3><p class="hint" id="st-fan-hint"></p><div class="chart-box"><canvas id="c-st-fan"></canvas></div></div>
+        <div class="grid g2">
+          <div class="panel"><h3>Where you could end up</h3><p class="hint">Share of simulated futures ending at each value</p><div class="chart-box short"><canvas id="c-st-hist"></canvas></div></div>
+          <div class="panel"><h3>What drives today’s hit</h3><p class="hint">Dollar change from each factor in this scenario</p><div class="chart-box short"><canvas id="c-st-contrib"></canvas></div></div>
+        </div>
+        <div class="panel"><h3>Your sensitivities</h3><p class="hint">Portfolio change for a typical one-year move in each factor, up (green) and down</p><div class="chart-box short"><canvas id="c-st-tornado"></canvas></div></div>
+        <div class="panel"><h3>Holding by holding</h3><p class="hint">Edit shares to test a different mix. β is sensitivity to the S&P 500; rate sensitivity is % change per +100 bp in the 10-year.</p>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ticker</th><th>Sector</th><th class="num">Shares</th><th class="num">Value</th><th class="num">β market</th><th class="num">Per +100 bp</th><th class="num">Fit (R²)</th><th class="num">Shock</th><th class="num">$ change</th></tr></thead><tbody id="st-rows"></tbody></table></div></div>
+      </div>
+    </div>`;
+
+  const showVal = () => {
+    m.factors.forEach((f) => {
+      const v = +$('st-f-' + f.key).value;
+      const imp = ST.last?.scenario?.implied?.includes(f.key);
+      $('st-f-' + f.key + '-v').innerHTML = imp && v === 0 ? `<span class="st-implied">${fmtShock(f, ST.last.scenario.effective_shocks[f.key])} implied</span>` : fmtShock(f, v);
+    });
+    sectors.forEach((s, i) => { $('st-s-' + i + '-v').textContent = fmtShock({ unit: '%' }, +$('st-s-' + i).value); });
+    const h = +$('st-h').value;
+    $('st-h-v').textContent = h < 12 ? `${h} mo` : `${(h / 12).toFixed(h % 12 ? 1 : 0)} yr`;
+    $('st-mr-v').textContent = (+$('st-mr').value).toFixed(1) + '%';
+    $('st-vm-v').textContent = (+$('st-vm').value).toFixed(1) + '×';
+    $('st-tr-v').textContent = (+$('st-tr').value).toFixed(1) + '%';
+  };
+  ST.showVal = showVal;
+  const read = () => {
+    m.factors.forEach((f) => { ST.shocks[f.key] = +$('st-f-' + f.key).value; });
+    ST.sectors = {};
+    sectors.forEach((s, i) => { const v = +$('st-s-' + i).value; if (v) ST.sectors[s] = v; });
+    Object.assign(ST.opts, { horizon_months: +$('st-h').value, market_return: +$('st-mr').value, vol_mult: +$('st-vm').value, target_return: +$('st-tr').value, linked: $('st-linked').checked, fat_tails: $('st-fat').checked });
+    showVal();
+    runStress();
+  };
+  $('st-root').querySelectorAll('input[type=range], input[type=checkbox]').forEach((el) => el.addEventListener('input', read));
+  const setAll = (shocks, secs) => {
+    m.factors.forEach((f) => { $('st-f-' + f.key).value = shocks[f.key] || 0; });
+    sectors.forEach((s, i) => { $('st-s-' + i).value = secs[s] || 0; });
+    read();
+  };
+  $('st-root').querySelectorAll('.st-preset').forEach((b) => b.addEventListener('click', () => {
+    const p = m.presets.find((x) => x.key === b.dataset.k);
+    $('st-root').querySelectorAll('.st-preset').forEach((x) => x.classList.toggle('active', x === b));
+    setAll(p.shocks, p.sectors);
+  }));
+  $('st-reset').addEventListener('click', () => { $('st-root').querySelectorAll('.st-preset').forEach((x) => x.classList.remove('active')); setAll({}, {}); });
+  showVal();
+  renderStressRows();
+}
+
+function renderStressRows() {
+  const id = (p, t) => `st-${p}-${t.replace(/[^A-Za-z0-9]/g, '_')}`;
+  $('st-rows').innerHTML = ST.model.assets.map((a) => `<tr><td><b>${esc(a.ticker)}</b></td><td>${esc(a.sector)}</td>
+      <td class="num"><input type="number" class="st-sh" data-t="${esc(a.ticker)}" min="0" step="any" value="${ST.shares[a.ticker] ?? 0}" style="width:100px;min-width:0" /></td>
+      <td class="num" id="${id('val', a.ticker)}">${usd(ST.values[a.ticker] || 0)}</td>
+      <td class="num">${a.betas.market.toFixed(2)}</td>
+      <td class="num">${a.betas.rates != null ? pct(a.betas.rates * 100 * 100) : '—'}</td>
+      <td class="num">${(a.r2 * 100).toFixed(0)}%</td>
+      <td class="num" id="${id('chp', a.ticker)}">—</td>
+      <td class="num" id="${id('chd', a.ticker)}">—</td></tr>`).join('');
+  $('st-rows').querySelectorAll('.st-sh').forEach((el) => el.addEventListener('change', () => {
+    const t = el.dataset.t, n = Math.max(0, +el.value || 0);
+    ST.shares[t] = n; ST.values[t] = n * (ST.prices[t] || 0);
+    $(id('val', t)).textContent = usd(ST.values[t]);
+    runStress(0);
+  }));
+  ST.rowId = id;
+}
+
+function updateStressRows(sc) {
+  const by = Object.fromEntries(sc.holdings.map((h) => [h.ticker, h]));
+  ST.model.assets.forEach((a) => {
+    const h = by[a.ticker], p = $(ST.rowId('chp', a.ticker)), d = $(ST.rowId('chd', a.ticker));
+    p.textContent = h ? pct(h.change_pct) : '—'; p.className = 'num ' + (h && h.change_pct < 0 ? 'down' : h && h.change_pct > 0 ? 'up' : '');
+    d.textContent = h ? signUsd(h.change) : '—'; d.className = 'num ' + (h && h.change < 0 ? 'down' : h && h.change > 0 ? 'up' : '');
+  });
+}
+
+function runStress(delay = 140) {
+  clearTimeout(ST.timer);
+  ST.timer = setTimeout(async () => {
+    const seq = ++ST.seq;
+    if (ST.ctrl) ST.ctrl.abort();
+    ST.ctrl = new AbortController();
+    $('st-root')?.classList.add('st-busy');
+    const o = ST.opts;
+    try {
+      const res = await fetch('/api/sensitivity/simulate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ST.ctrl.signal,
+        body: JSON.stringify({ model: ST.model, values: ST.values, shocks: ST.shocks, sector_shocks: ST.sectors,
+          horizon_months: o.horizon_months, market_return: o.market_return / 100, vol_mult: o.vol_mult,
+          target_return: o.target_return / 100, linked: o.linked, fat_tails: o.fat_tails }),
+      });
+      const r = await res.json();
+      if (seq !== ST.seq) return;
+      if (r.error || !r.available) throw new Error(r.error || r.reason);
+      ST.last = r;
+      drawStress(r);
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      $('st-say').innerHTML = `<div class="label">Something went wrong</div><p>${esc(e.message)}</p>`;
+    } finally {
+      if (seq === ST.seq) $('st-root')?.classList.remove('st-busy');
+    }
+  }, delay);
+}
+
+function stChart(key, id, cfg) {
+  const ch = charts[key];
+  if (ch && ch.config.type === cfg.type) {
+    ch.data.labels = cfg.data.labels;
+    cfg.data.datasets.forEach((ds, i) => { if (ch.data.datasets[i]) Object.assign(ch.data.datasets[i], ds); else ch.data.datasets.push(ds); });
+    ch.data.datasets.length = cfg.data.datasets.length;
+    if (cfg.options?.plugins?.tooltip) ch.options.plugins.tooltip = { ...ch.options.plugins.tooltip, ...cfg.options.plugins.tooltip };
+    ch.update('none');
+  } else {
+    cfg.options = { animation: false, ...(cfg.options || {}) };
+    mk(key, id, cfg);
+  }
+}
+
+function drawStress(r) {
+  const sc = r.scenario, b = r.mc.base, s = r.mc.shock, a = r.assumptions;
+  const H = a.horizon_months, hz = H < 12 ? `${H} month${H > 1 ? 's' : ''}` : `${+(H / 12).toFixed(1)} year${H > 12 ? 's' : ''}`;
+  const shocked = Math.abs(sc.change) > 0.005;
+  const down = sc.change < 0;
+  $('st-kpis').innerHTML = [
+    kpi('Value now', usd0(r.value_now), `${ST.model.assets.filter((x) => ST.values[x.ticker] > 0).length} holdings modelled`, C.mint),
+    kpi('After the shock', `<span class="${down ? 'down' : 'up'}">${usd0(sc.value_after)}</span>`, shocked ? `${sc.change < 0 ? '−' : '+'}${usd0(Math.abs(sc.change))} (${pct(sc.change_pct)})` : 'no shock set', down ? '#f6e3da' : C.mint),
+    kpi(`Middle outcome, ${hz}`, usd0(s.percentiles['50']), `90% range ${usdShort(s.percentiles['5'])} to ${usdShort(s.percentiles['95'])}`, '#dcebf3'),
+    kpi('Chance of a loss', `${(s.prob_loss * 100).toFixed(0)}%`, shocked ? `vs ${(b.prob_loss * 100).toFixed(0)}% with no shock` : `in ${hz}`, '#f7efd9'),
+  ].join('');
+
+  const say = [];
+  if (shocked) {
+    const contrib = Object.entries(sc.contributions).filter(([, v]) => Math.abs(v) > 0.5).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1]));
+    const lbl = (k) => k === 'sector' ? 'sector shocks' : (ST.model.factors.find((f) => f.key === k)?.label || k).replace(/ \(.*\)/, '').toLowerCase();
+    say.push(`This scenario would ${down ? 'cut' : 'add'} <b class="${down ? 'down' : 'up'}">${usd0(Math.abs(sc.change))} (${pct(sc.change_pct)})</b> today${contrib.length ? `, mostly from ${contrib.slice(0, 2).map(([k]) => '<b>' + esc(lbl(k)) + '</b>').join(' and ')}` : ''}.`);
+  } else {
+    say.push('No shock is set, so this is the plain spread of outcomes. Move a slider or pick a scenario above.');
+  }
+  say.push(`Over ${hz}, half of the ${a.paths.toLocaleString()} simulated futures end above <b>${usd0(s.percentiles['50'])}</b>. One in twenty ends below <b>${usd0(s.percentiles['5'])}</b>, and in that worst 5% the average loss is <b>${Math.abs(s.cvar95_pct).toFixed(0)}%</b>.`);
+  say.push(`Chance of reaching your ${(ST.opts.target_return).toFixed(1)}% a year target: <b>${(s.prob_target * 100).toFixed(0)}%</b>. Chance of a fall of 20% or more from a high along the way: <b>${(s.prob_drawdown20 * 100).toFixed(0)}%</b>.`);
+  $('st-say').innerHTML = `<div class="label">🌿 What it means for you</div>${say.map((x) => `<p>${x}</p>`).join('')}`;
+  $('st-fan-hint').textContent = `Portfolio value, ${a.paths.toLocaleString()} simulated paths. Assumes ${a.expected_return_pct.toFixed(1)}% a year expected return and ${a.volatility_pct.toFixed(0)}% yearly swing${a.fat_tails ? ', fat tails on' : ''}.`;
+
+  const mo = r.mc.months.map((x) => x < 1 ? `${Math.round(x * 4.33)}w` : Number.isInteger(x) ? `${x}m` : `${x.toFixed(1)}m`);
+  stChart('stFan', 'c-st-fan', {
+    type: 'line',
+    data: { labels: mo, datasets: [
+      { label: '95th', data: s.fan['95'], borderColor: 'transparent', backgroundColor: 'rgba(95,163,106,.14)', fill: '+4', pointRadius: 0, tension: 0.2 },
+      { label: '75th', data: s.fan['75'], borderColor: 'transparent', backgroundColor: 'rgba(95,163,106,.28)', fill: '+2', pointRadius: 0, tension: 0.2 },
+      { label: 'Middle', data: s.fan['50'], borderColor: C.forest, borderWidth: 2.5, fill: false, pointRadius: 0, tension: 0.2 },
+      { label: '25th', data: s.fan['25'], borderColor: 'transparent', fill: false, pointRadius: 0, tension: 0.2 },
+      { label: '5th', data: s.fan['5'], borderColor: 'transparent', fill: false, pointRadius: 0, tension: 0.2 },
+      { label: 'No shock, middle', data: b.fan['50'], borderColor: C.soft, borderDash: [5, 4], borderWidth: 1.5, fill: false, pointRadius: 0, tension: 0.2, hidden: !shocked },
+    ] },
+    options: { interaction: { mode: 'index', intersect: false }, plugins: { legend: { labels: { filter: (i) => ['Middle', 'No shock, middle'].includes(i.text) } }, tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${usd(c.raw)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 12 } }, y: { grid: { color: C.line }, ticks: { callback: (v) => usdShort(v) } } } },
+  });
+
+  const e = r.mc.hist.edges, mids = e.slice(0, -1).map((x, i) => (x + e[i + 1]) / 2);
+  const tot = a.paths;
+  stChart('stHist', 'c-st-hist', {
+    type: 'bar',
+    data: { labels: mids.map(usdShort), datasets: [
+      { label: shocked ? 'With shock' : 'Simulated', data: r.mc.hist.shock.map((x) => x / tot * 100), backgroundColor: mids.map((x) => x < r.value_now ? 'rgba(201,123,90,.75)' : 'rgba(95,163,106,.8)'), borderRadius: 3, categoryPercentage: 1, barPercentage: 0.95 },
+      { label: 'No shock', type: 'line', data: r.mc.hist.base.map((x) => x / tot * 100), borderColor: C.soft, borderDash: [4, 3], borderWidth: 1.5, pointRadius: 0, tension: 0.3, hidden: !shocked },
+    ] },
+    options: { plugins: { legend: { display: shocked }, tooltip: { callbacks: { title: (c) => `About ${usd(mids[c[0].dataIndex])}`, label: (c) => ` ${c.dataset.label}: ${c.raw.toFixed(1)}% of futures` } } },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 6, maxRotation: 0 } }, y: { grid: { color: C.line }, ticks: { callback: (v) => v + '%' } } } },
+  });
+
+  const keys = [...ST.model.factor_keys, 'sector'];
+  const labels = keys.map((k) => k === 'sector' ? 'Sector shocks' : (ST.model.factors.find((f) => f.key === k)?.label || k).replace(/ \(.*\)/, ''));
+  const vals = keys.map((k) => sc.contributions[k] || 0);
+  stChart('stContrib', 'c-st-contrib', {
+    type: 'bar',
+    data: { labels, datasets: [{ data: vals, backgroundColor: vals.map((v) => v < 0 ? C.clay : C.leaf), borderRadius: 6 }] },
+    options: { indexAxis: 'y', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${signUsd(c.raw)}${sc.implied.includes(keys[c.dataIndex]) ? ' (implied)' : ''}` } } },
+      scales: { x: { grid: { color: C.line }, ticks: { callback: (v) => usdShort(v) } }, y: { grid: { display: false }, ticks: { color: C.ink, font: { weight: 700 } } } } },
+  });
+
+  const ex = r.exposures;
+  stChart('stTornado', 'c-st-tornado', {
+    type: 'bar',
+    data: { labels: ex.map((x) => `${x.label.replace(/ \(.*\)/, '')} ±${x.standard}${x.unit === '%' ? '%' : ' ' + x.unit}`), datasets: [
+      { label: 'Factor up', data: ex.map((x) => x.pct_up), backgroundColor: C.leaf, borderRadius: 5 },
+      { label: 'Factor down', data: ex.map((x) => x.pct_down), backgroundColor: C.clay, borderRadius: 5 },
+    ] },
+    options: { indexAxis: 'y', plugins: { tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${pct(c.raw)} on your portfolio` } } },
+      scales: { x: { stacked: true, grid: { color: C.line }, ticks: { callback: (v) => v + '%' } }, y: { stacked: true, grid: { display: false }, ticks: { color: C.ink, font: { weight: 700 } } } } },
+  });
+
+  ST.showVal?.();
+  updateStressRows(sc);
 }
 
 // ── Chapter 8: suggested changes (its own dashboard) ─────────────
@@ -1180,6 +1454,7 @@ function moneyOpts() {
 }
 
 function usd(n) { if (n == null || isNaN(n)) return '—'; return '$' + (+n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function usd0(n) { if (n == null || isNaN(n)) return '—'; return '$' + Math.round(+n).toLocaleString('en-US'); }
 function signUsd(n) { return (n >= 0 ? '+' : '−') + usd(Math.abs(n)); }
 function usdShort(v) { const a = Math.abs(v); return (v < 0 ? '-' : '') + '$' + (a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e3 ? (a / 1e3).toFixed(1) + 'K' : a.toFixed(0)); }
 function pct(n) { if (n == null || isNaN(n)) return '—'; return (n >= 0 ? '+' : '') + (+n).toFixed(1) + '%'; }

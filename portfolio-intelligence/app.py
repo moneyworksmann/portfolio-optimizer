@@ -12,6 +12,8 @@ Routes
   POST /api/analyze           holdings -> P&L, optimization, PRISM, since-you-bought,
                               Monte Carlo return distribution
   POST /api/simulate          holdings + options -> Monte Carlo return distribution
+  POST /api/sensitivity/model     holdings -> factor betas for the stress test
+  POST /api/sensitivity/simulate  model + slider settings -> scenario + Monte Carlo
 
 One POST /api/analyze builds a single MarketData object and passes it to the
 valuation, optimizer and PRISM layers in turn. Before the merge this was two
@@ -23,10 +25,11 @@ import math
 import os
 import time
 
+import numpy as np
 from flask import Flask, jsonify, render_template, request
 
-from core import hindsight, ingest, montecarlo, optimizer, portfolio, prism
-from core.market_data import MarketData, counters, reset_counters
+from core import hindsight, ingest, montecarlo, optimizer, portfolio, prism, sensitivity
+from core.market_data import MarketData, counters, lookup_sectors, reset_counters
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB
@@ -357,6 +360,79 @@ def simulate():
         'elapsed_ms': int((time.time() - started) * 1000),
         'fetches': counters(),
     }
+    return jsonify(_sanitize(result))
+
+
+# ── stress test: live sensitivity + Monte Carlo ──────────────────────────────
+
+_MODEL_CACHE: dict = {}
+_MODEL_TTL = 30 * 60
+
+
+@app.route('/api/sensitivity/model', methods=['POST'])
+def sensitivity_model():
+    """Holdings -> factor betas, factor covariance and presets. One download;
+    the browser keeps the result and sends it back with every slider move."""
+    body = request.get_json(force=True, silent=True) or {}
+    items = body.get('holdings', [])
+    tickers = list(dict.fromkeys(
+        str(h.get('ticker', '')).upper().strip() for h in items if str(h.get('ticker', '')).strip()
+    ))[:100]
+    if not tickers:
+        return jsonify({'error': 'No holdings provided'}), 400
+    sectors = {str(h.get('ticker', '')).upper().strip(): h.get('sector')
+               for h in items if h.get('sector')}
+
+    key = tuple(sorted(tickers))
+    hit = _MODEL_CACHE.get(key)
+    if hit and time.time() - hit[0] < _MODEL_TTL:
+        return jsonify(hit[1])
+
+    missing = [t for t in tickers if t not in sectors]
+    if missing:
+        try:
+            sectors.update(lookup_sectors(missing))
+        except Exception:
+            pass
+    model = _sanitize(sensitivity.build_model(tickers, sectors))
+    if model.get('available'):
+        _MODEL_CACHE[key] = (time.time(), model)
+    return jsonify(model)
+
+
+@app.route('/api/sensitivity/simulate', methods=['POST'])
+def sensitivity_simulate():
+    """Model + slider settings -> scenario P&L and Monte Carlo. No downloads."""
+    body = request.get_json(force=True, silent=True) or {}
+    model = body.get('model') or {}
+    try:
+        keys = list(model['factor_keys'])
+        if not 1 <= len(keys) <= len(sensitivity.FACTORS) or 'market' not in keys:
+            raise ValueError
+        if len(model.get('assets', [])) > 100:
+            raise ValueError
+        values = {str(k): float(v) for k, v in (body.get('values') or {}).items()}
+
+        def num(name, default, lo, hi):
+            try:
+                return min(hi, max(lo, float(body.get(name, default))))
+            except (TypeError, ValueError):
+                return default
+
+        result = sensitivity.simulate(
+            model, values,
+            shocks={k: float(v) for k, v in (body.get('shocks') or {}).items() if k in keys},
+            sector_shocks={str(k): float(v) for k, v in (body.get('sector_shocks') or {}).items()},
+            vol_mult=num('vol_mult', 1.0, 0.25, 4.0),
+            horizon_months=int(num('horizon_months', 12, 1, 120)),
+            market_return=num('market_return', 0.07, -0.5, 0.5),
+            linked=bool(body.get('linked', True)),
+            fat_tails=bool(body.get('fat_tails', True)),
+            target_return=num('target_return', 0.0, -0.5, 1.0),
+            paths=int(num('paths', 4000, 500, 10000)),
+        )
+    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+        return jsonify({'error': 'The stress-test model looks malformed. Reload it and try again.'}), 400
     return jsonify(_sanitize(result))
 
 

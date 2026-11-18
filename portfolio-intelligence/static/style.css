@@ -219,3 +219,23 @@ input:focus { border-color: var(--leaf); box-shadow: 0 0 0 3px rgba(95, 163, 106
 .candidate-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .candidate-row input { width: 120px; text-transform: uppercase; font-weight: 700; letter-spacing: .04em; }
 .candidate-chip { border: 2px solid var(--leaf) !important; }
+
+/* ── stress test ─────────────────────────────────────── */
+.st-presets { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.st-preset.active { background: var(--mint); border-color: var(--leaf); color: var(--forest); }
+.st-layout { display: grid; grid-template-columns: minmax(270px, 330px) 1fr; gap: 16px; align-items: start; }
+.st-controls { position: sticky; top: 76px; max-height: calc(100vh - 92px); overflow-y: auto; }
+.st-out { display: grid; gap: 16px; min-width: 0; transition: opacity .15s; }
+.st-busy .st-out { opacity: .72; }
+.st-say { margin-top: 0; }
+.st-slider { margin: 10px 0 12px; }
+.st-lab { display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.st-lab b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.st-implied { color: var(--soft); font-weight: 600; font-style: italic; }
+.st-slider input[type=range] { width: 100%; accent-color: var(--forest); margin-top: 4px; }
+.st-check { display: flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--ink2); margin-top: 6px; cursor: pointer; }
+.st-check input { accent-color: var(--forest); }
+@media (max-width: 1080px) {
+  .st-layout { grid-template-columns: 1fr; }
+  .st-controls { position: static; max-height: none; }
+}

@@ -71,6 +71,7 @@ you arrive, the side rail tracks where you are, and the rest dims so there is on
 | The last 12 months | Current holdings vs SPY over a year |
 | Risk health | PRISM score, its four parts, and the correlation grid |
 | Range of outcomes | Monte Carlo replays of the next 12 months for your holdings: middle case, chance of a down year, 1-in-20 loss in dollars, fan chart, histogram, and your mix vs the suggested mix |
+| Stress test | Live sliders for the stock market, 10-year yield, yield-curve slope, VIX, oil, the dollar and per-sector shocks, plus Monte Carlo settings (horizon, market return, volatility, target, fat tails). Shows the instant hit, which factor drives it, each holding's sensitivity, and a Monte Carlo fan chart and outcome histogram with and without the shock. Shares are editable in place |
 | Suggested changes | Its own dashboard: the trades (add / trim / exit, in % , $ and shares) that turn today’s mix into the max-Sharpe mix, expected return and $/year before and after, risk and Sharpe change, and a year replayed with both mixes |
 | Every holding | The full table per purchase |
 
@@ -193,6 +194,22 @@ shared fat-tailed shock, so crashes hit all holdings at once. `bootstrap`
 replays whole historical days (in blocks of `block` days if set), keeping the
 real tails and correlations with no distributional assumption. Paths are
 buy-and-hold, so winners drift to a larger share over the horizon.
+**`POST /api/sensitivity/model`** — `{"holdings": [{"ticker", "sector"?}]}`. One 5-year weekly download of
+the holdings plus SPY, ^TNX, ^IRX, ^VIX, USO and UUP, then a ridge-stabilised regression of each holding on
+those factors (market return, change in the 10-year yield in bp, change in the 10y − 3m slope in bp, change in
+VIX, oil return, dollar return). Returns betas, residual volatility, R², the factor covariance and scenario
+presets. A factor that fails to download is dropped rather than failing the request. Cached for 30 minutes.
+
+**`POST /api/sensitivity/simulate`** — the model from above plus `values` ({ticker: $}), `shocks`,
+`sector_shocks`, `horizon_months`, `market_return`, `vol_mult`, `target_return`, `linked`, `fat_tails`.
+No downloads, so the dashboard calls it on every slider move (about 0.1 s for 40 holdings over a year).
+It returns the instant scenario (per holding and per factor), each factor's one-year-move exposure, and a
+Monte Carlo run on the shared engine (`core/montecarlo.py`, the same one behind `/api/simulate`) with the
+factor model's means and covariance, in monthly steps (weekly under 4 months), up to 4,000 paths, with and
+without the shock on the same random draws: percentiles,
+chance of loss, chance of hitting the target, VaR/CVaR 95, drawdowns, a fan chart and a histogram. With
+`linked` on, factors left at zero take their conditional expected move given the ones you set. Expected
+returns are CAPM-style (cash rate + β × market premium); `fat_tails` switches the engine to `student_t` (df 4).
 
 **`POST /api/parse`** — multipart `files` (any number, any supported format) and/or `sheet_url`; returns purchases with `ticker, shares, avg_cost, acquired, name, source`, plus notes.
 
@@ -220,6 +237,7 @@ Tests (no network needed, prices are faked):
 pip install pytest
 python3 -m pytest
 ```
+Tests (no network needed): `pip install pytest && python -m pytest tests`.
 
 Screenshot ingest additionally needs `pytesseract`, `pillow`, and a system
 Tesseract install (`brew install tesseract` on macOS). Without them, CSV and
