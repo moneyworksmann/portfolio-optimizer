@@ -183,6 +183,7 @@ async function runAnalyze() {
     const res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ holdings: valid }) });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    saveForStress(data);
     buildStory(data);
     showView('view-story');
   } catch (e) {
@@ -203,7 +204,7 @@ function buildStory(d) {
   window._data = d;
   const chapters = [
     chToday(d), chJourney(d), chPositions(d), chPeaks(d), chAllocation(d),
-    chYear(d), chRisk(d), chOutcomes(d), chSuggest(d), chTable(d),
+    chYear(d), chRisk(d), chOutcomes(d), chStress(d), chSuggest(d), chTable(d),
   ].filter(Boolean);
 
   $('story').innerHTML = chapters.map((c, i) => `
@@ -588,6 +589,26 @@ function chOutcomes(d) {
       });
     },
   };
+}
+
+// ── Chapter: stress test (opens its own page) ──────────────────
+function chStress(d) {
+  if (!d.holdings?.length) return null;
+  return {
+    id: 'stress', rail: 'Stress test', title: 'What if the world moves?',
+    what: 'The stress test has its own page. Move sliders for the stock market, interest rates, oil, the dollar, market fear and each sector, and watch your portfolio’s value and its range of future outcomes update as you go.',
+    how: ['Your holdings are carried over automatically.', 'Start with a ready-made scenario such as “Recession”, then adjust the sliders.'],
+    takeaway: [],
+    visual: `<div class="panel st-cta"><div class="st-cta-icon">🎛️</div><div><h3>Open the stress test</h3><p class="hint">Uses the ${d.holdings.length} holdings you just analysed. Opens in a new tab so this story stays here.</p></div><a class="btn btn-primary" href="/stress" target="_blank" rel="noopener">Open the stress test →</a></div>`,
+  };
+}
+
+function saveForStress(d) {
+  try {
+    const dropped = d.meta?.dropped_tickers || [];
+    const rows = d.holdings.filter((h) => !dropped.includes(h.ticker)).map((h) => ({ ticker: h.ticker, shares: h.shares, sector: h.sector, price: h.current_price }));
+    localStorage.setItem('pi_portfolio', JSON.stringify({ saved: new Date().toISOString(), holdings: rows }));
+  } catch (e) { /* storage blocked: the stress page lets you type holdings instead */ }
 }
 
 // ── Chapter 8: suggested changes (its own dashboard) ─────────────
